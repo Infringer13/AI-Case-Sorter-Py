@@ -37,6 +37,12 @@ moments before you noticed.
 To collect more detail, start the app with `CASESORTER_LOG_LEVEL=DEBUG` set in
 the environment.
 
+## An error flashed past in the status bar
+
+Click the status bar's message, or open **View → Messages**: the
+[Messages](guide/GUIDE.md#messages) panel keeps the last 200 status lines in
+full, errors marked, and **Copy all** puts them on the clipboard for a report.
+
 ## Nothing happens when I start the app
 
 Read `launch.log` — it holds everything from the launcher onwards, including
