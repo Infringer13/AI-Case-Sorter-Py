@@ -34,6 +34,8 @@ import requests
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtGui import QKeySequence
+
 from sorter import paths
 from sorter.ui import dialog_update
 from sorter.ui.dialog_update import (
@@ -160,6 +162,12 @@ def test_available_shows_notes_and_download(make_dialog):
     assert "something new" in dialog.notes.toPlainText()
     assert dialog.primary_button.text() == PRIMARY_DOWNLOAD
     assert not visible(dialog, dialog.progress)
+
+
+def test_the_download_button_keeps_its_ampersand(make_dialog):
+    dialog = make_dialog(info=info())
+
+    assert QKeySequence.mnemonic(dialog.primary_button.text()).isEmpty()
 
 
 def test_up_to_date_hides_download_but_keeps_the_picker(make_dialog):
