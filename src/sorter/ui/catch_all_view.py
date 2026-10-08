@@ -5,12 +5,19 @@ says which headstamps those were and why, counted from the same successful
 ``run/result`` events the slot card uses, so the header matches the card.
 Counts survive Stop/Start; ``QtMainWindow._clear_counts`` is what zeroes them.
 
-The table is items only — no cell widgets (CLAUDE.md §5). The one action
-sits on the selection bar under the table, keyed on the headstamp name so a
-re-sort does not lose the selection. ``&`` in a name goes through
-``formatting.escape_mnemonic``. Only a below-floor reason takes the palette's
-warning colour ("Hue is meaning"); ``apply_palette`` re-bakes that brush
-because an item foreground is outside the stylesheet.
+The table is items only — no cell widgets (CLAUDE.md §5). It ranks only
+headstamps that would still land in slot 0 if seen now: giving one a slot
+drops its unassigned and unknown cases so the next one moves up. Below
+floor, upside down and batch full stay, and a mixed row shows only that
+remainder. The header stays the physical bin total. A line under the table
+names what left the ranking and how many of those cases are already in bin 0.
+
+The one action sits on the selection bar under the table, keyed on the
+headstamp name so a re-sort does not lose the selection. Assigning from the
+panel then selects the next headstamp that can still be assigned. ``&`` in a
+name goes through ``formatting.escape_mnemonic``. Only a below-floor reason
+takes the palette's warning colour ("Hue is meaning"); ``apply_palette``
+re-bakes that brush because an item foreground is outside the stylesheet.
 
 Subscribes ``run/result`` and ``run/assignment_changed`` on ``win.bus``.
 """
@@ -38,6 +45,8 @@ from ..control.catch_all import (
     EMPTY_KEY,
     CatchAllBucket,
     CatchAllTally,
+    assigned_session_line,
+    fixed_by_assignment,
     percent,
     reason_summary,
     reason_tooltip,
@@ -67,6 +76,11 @@ class CatchAllView(QWidget):
         # The selected headstamp's key, not its row: a new case re-sorts the
         # table and the row number moves.
         self._selected_key: str | None = None
+        # Keys assigned away from the ranking, in the order it happened.
+        self._session_order: list[str] = []
+        self._open_top: list[CatchAllBucket] = []
+        # Set for the refresh that follows the panel's own Assign click.
+        self._prefer_next_assignable = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -91,6 +105,12 @@ class CatchAllView(QWidget):
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
         outer.addWidget(self.table, 1)
 
+        self.assigned_label = QLabel("", self)
+        self.assigned_label.setObjectName("catchAllAssigned")
+        self.assigned_label.setWordWrap(True)
+        self.assigned_label.hide()
+        outer.addWidget(self.assigned_label)
+
         bar = QHBoxLayout()
         bar.addStretch(1)
         self.assign_button = QPushButton("Assign to empty slot", self)
@@ -114,13 +134,14 @@ class CatchAllView(QWidget):
         self.refresh()
 
     def _on_assignment_changed(self, _payload: Any) -> None:
-        # The tally is historical; the button asks the live config.
+        # The tally is historical. The ranking and the button ask the live config.
         self.refresh()
 
     def reset(self) -> None:
         """Zero the breakdown. The dashboard's Reset counts is the caller."""
         self.tally.reset()
         self._selected_key = None
+        self._session_order.clear()
         self.refresh()
 
     def apply_palette(self) -> None:
@@ -130,21 +151,60 @@ class CatchAllView(QWidget):
     # ----- table ---------------------------------------------------------------
 
     def refresh(self) -> None:
-        selected = self._selected_key
         self.summary_label.setText(_summary(self.tally))
+        self._sync_session_order()
+        self._paint_session_line()
+        self._open_top, other = self.tally.open_ranking(self._has_slot)
+        selected = self._first_assignable_key() if self._prefer_next_assignable else self._selected_key
         self.table.blockSignals(True)
         self.table.setRowCount(0)
         caught = self.tally.catch_all_total
         warning = self._color("warning", _FALLBACK_WARNING)
         muted = self._color("text_muted", _FALLBACK_MUTED)
-        for rank, bucket in enumerate(self.tally.top(10), start=1):
+        for rank, bucket in enumerate(self._open_top, start=1):
             self._add_bucket_row(rank, bucket, caught, warning)
-        other_keys, other_cases = self.tally.other()
+        other_keys, other_cases = other
         if other_keys:
             self._add_other_row(other_keys, other_cases, caught, muted)
         self._restore_selection(selected)
         self.table.blockSignals(False)
         self._update_button()
+
+    def _sync_session_order(self) -> None:
+        """Remember who left the ranking, and forget them once the slot is gone."""
+        active = [
+            bucket.key
+            for bucket in self.tally.buckets()
+            if self._has_slot(bucket.key) and fixed_by_assignment(bucket) > 0
+        ]
+        active_set = set(active)
+        self._session_order = [key for key in self._session_order if key in active_set]
+        for key in active:
+            if key not in self._session_order:
+                self._session_order.append(key)
+
+    def _paint_session_line(self) -> None:
+        by_key = {bucket.key: bucket for bucket in self.tally.buckets()}
+        entries: list[tuple[str, list[int], int]] = []
+        for key in self._session_order:
+            bucket = by_key.get(key)
+            slots = self._assigned_slots(key)
+            if bucket is None or not slots:
+                continue
+            entries.append((key, slots, fixed_by_assignment(bucket)))
+        text = assigned_session_line(entries)
+        self.assigned_label.setText(text)
+        self.assigned_label.setVisible(bool(text))
+
+    def _first_assignable_key(self) -> str | None:
+        """The first ranked headstamp the Assign button can still act on."""
+        if self._win.config.first_empty_slot() is None:
+            return None
+        for bucket in self._open_top:
+            if self._has_slot(bucket.key) or not self._known(bucket.key):
+                continue
+            return bucket.key
+        return None
 
     def _add_bucket_row(self, rank: int, bucket: CatchAllBucket, caught: int, warning: QColor) -> None:
         row = self.table.rowCount()
@@ -216,13 +276,16 @@ class CatchAllView(QWidget):
             return [int(slot)]
         return []
 
+    def _has_slot(self, key: str) -> bool:
+        return bool(self._assigned_slots(key))
+
     def _known(self, key: str) -> bool:
         if not key or key == EMPTY_KEY:
             return False
         return self._win.config.slot_for_headstamp(key) is not None
 
     def _bucket(self, key: str) -> CatchAllBucket | None:
-        for bucket in self.tally.top(10):
+        for bucket in self._open_top:
             if bucket.key == key:
                 return bucket
         return None
@@ -274,7 +337,12 @@ class CatchAllView(QWidget):
         if assign is None:
             return
         assign(key)
+        # A failed assign leaves the row where it was. A successful one moves
+        # the selection to the next headstamp that can still take a bin, so
+        # Assign can be clicked straight down the list.
+        self._prefer_next_assignable = self._has_slot(key)
         self.refresh()
+        self._prefer_next_assignable = False
 
 
 def build_catch_all_view(win: Any) -> CatchAllView:
