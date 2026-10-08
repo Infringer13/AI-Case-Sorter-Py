@@ -267,11 +267,14 @@ sanctioned way for worker threads to update the UI.
   active model; AI Config mode stashes them in a settings key). Also the home of
   routing logic: `slot_for_headstamp`, package-mode slot maps, parent
   classifications, auto-select, run options (confidence floor, store-images mode),
-  and the sorting-template API (see below). `assign_label_to_empty_slot` is
-  the one writer auto-select and the Catch-All panel share. In parent mode it
-  sets the **parent's** slot — routing reads that, so writing the child's
+  and the sorting-template API (see below). `assign_label_to_empty_slot` and
+  `assign_label_to_slot` are the writers auto-select and the Catch-All panel
+  share; both go through `_place_unassigned_label`, so the mode rules stay
+  one place. The second places an unassigned label on a chosen slot (the
+  panel uses it to share a bin that already has brass). In parent mode the
+  write is the **parent's** slot — routing reads that, so writing the child's
   slot left every later case on the catch-all and re-fired
-  `run/assignment_changed` per case. It returns a slot only when the write
+  `run/assignment_changed` per case. Either returns a slot only when the write
   landed (`set_headstamp_slot` False used to be reported as success).
 - **`models.py`** — dataclasses: `Model`, `Headstamp`, `Cartridge`, `SlotTemplate`,
   `TrainingConfig`, `AIModelConfig`, `ImageProcessingConfig`, plus normalizers
@@ -868,9 +871,13 @@ and a mixed row shows only the remainder. A line under the table
 ("Assigned this session: …") names what left and how many cases are already
 in bin 0; `_clear_counts` clears it with the tally. Counts survive
 Stop/Start. The assign button is a selection-bar `#action` control — items
-only in the table, selection kept by headstamp key — and a successful
-assign from the panel selects the next key the button can still assign.
-Dialogs are `dialog_*.py`.
+only in the table, selection kept by headstamp key. Beside it, **Add to
+existing slot…** (`catchAllAdd`, not an action colour) opens a menu of
+occupied slots (`#4 WMA, WMA NATO`, the same occupancy as the slot cards)
+and calls `assign_label_to_slot`. It is disabled, with a tooltip, when the
+label is unknown or no slot is occupied. A successful assign from either
+control selects the next key that can still be assigned, including when
+every slot is taken and only sharing remains. Dialogs are `dialog_*.py`.
 
 ### Conventions, each one load-bearing
 

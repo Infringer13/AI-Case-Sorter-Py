@@ -12,12 +12,15 @@ floor, upside down and batch full stay, and a mixed row shows only that
 remainder. The header stays the physical bin total. A line under the table
 names what left the ranking and how many of those cases are already in bin 0.
 
-The one action sits on the selection bar under the table, keyed on the
-headstamp name so a re-sort does not lose the selection. Assigning from the
-panel then selects the next headstamp that can still be assigned. ``&`` in a
-name goes through ``formatting.escape_mnemonic``. Only a below-floor reason
-takes the palette's warning colour ("Hue is meaning"); ``apply_palette``
-re-bakes that brush because an item foreground is outside the stylesheet.
+Two actions sit on the selection bar under the table, keyed on the
+headstamp name so a re-sort does not lose the selection. **Assign to empty
+slot** is the primary ``#action`` control. **Add to existing slot…** opens a
+menu of bins that already have brass (``#4 WMA, WMA NATO``) and shares that
+bin. Either one then selects the next headstamp that can still be assigned.
+``&`` in a name goes through ``formatting.escape_mnemonic``. Only a
+below-floor reason takes the palette's warning colour ("Hue is meaning");
+``apply_palette`` re-bakes that brush because an item foreground is outside
+the stylesheet.
 
 Subscribes ``run/result``, ``run/assignment_changed`` and ``mode/changed``
 on ``win.bus``. A result does not re-read the database: the label-to-slot
@@ -36,6 +39,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMenu,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -69,16 +73,46 @@ class _Routing(NamedTuple):
     slots: dict[str, list[int]]
     known: set[str]
     empty: int | None
+    # Occupied bins in slot order: ``(4, ("WMA", "WMA NATO"))``. Matches the
+    # slot cards — package map, else parent names plus orphans, else headstamps.
+    occupied: tuple[tuple[int, tuple[str, ...]], ...]
 
 
-def _known_and_routed(config: Any) -> tuple[set[str], dict[str, int]]:
-    """Names ``slot_for_headstamp`` would resolve, and the slot it would return.
+def _occupy(groups: dict[int, list[str]], slot: int, name: str) -> None:
+    if slot <= 0 or not name:
+        return
+    names = groups.setdefault(slot, [])
+    if name not in names:
+        names.append(name)
+
+
+def _occupied_pairs(groups: dict[int, list[str]]) -> tuple[tuple[int, tuple[str, ...]], ...]:
+    """Slot order, names within a slot sorted case-insensitively, blanks dropped."""
+    pairs: list[tuple[int, tuple[str, ...]]] = []
+    for slot in sorted(groups):
+        if slot <= 0:
+            continue
+        seen: list[str] = []
+        for name in groups[slot]:
+            text = str(name).strip()
+            if text and text not in seen:
+                seen.append(text)
+        if seen:
+            pairs.append((slot, tuple(sorted(seen, key=str.casefold))))
+    return tuple(pairs)
+
+
+def _known_and_routed(config: Any) -> tuple[set[str], dict[str, int], dict[int, list[str]]]:
+    """Names ``slot_for_headstamp`` would resolve, the slot, and who occupies bins.
 
     One pass over the headstamp list (and the parents, when that mode is on).
     Slot 0 is known but unassigned. A label the lookup would miss is absent.
+    Occupancy follows the slot cards: a child's own slot column does not
+    occupy a bin while parent mode routes it through the parent.
     """
     known: set[str] = set()
     routed: dict[str, int] = {}
+    occupied: dict[int, list[str]] = {}
     active = config.settings.get_active_model_id()
     if active is not None and config.use_parent_classifications:
         parents = config.parents_with_slots()
@@ -94,39 +128,55 @@ def _known_and_routed(config: Any) -> tuple[set[str], dict[str, int]]:
                 if parent_id is not None and int(parent_id) in by_id:
                     routed[name] = int(by_id[int(parent_id)]["slot"])
                 else:
-                    routed[name] = int(entry.get("slot") or 0)
+                    own = int(entry.get("slot") or 0)
+                    routed[name] = own
+                    _occupy(occupied, own, name)
             for parent in parents:
                 name = str(parent["name"])
+                slot = int(parent["slot"])
+                _occupy(occupied, slot, name)
                 if name in known:
                     continue
                 known.add(name)
-                routed[name] = int(parent["slot"])
-            return known, routed
+                routed[name] = slot
+            return known, routed, occupied
     for entry in config.headstamps:
         name = entry.get("name")
         if not name:
             continue
         name = str(name)
         known.add(name)
-        routed[name] = int(entry.get("slot") or 0)
-    return known, routed
+        slot = int(entry.get("slot") or 0)
+        routed[name] = slot
+        _occupy(occupied, slot, name)
+    return known, routed, occupied
 
 
 def _load_routing(config: Any) -> _Routing:
     """The panel's copy of "would this label still land in slot 0?"."""
-    known, routed = _known_and_routed(config)
+    known, routed, occupied = _known_and_routed(config)
     if config.run_package_mode:
+        # Package assignments win over parent and per-headstamp slots, the
+        # same way the slot cards and ``first_empty_slot`` decide occupancy.
         slots: dict[str, list[int]] = {}
+        occupied = {}
         for slot, names in config.package_slot_map().items():
             slot_n = int(slot)
             if slot_n <= 0:
                 continue
             for name in names:
-                slots.setdefault(str(name), []).append(slot_n)
+                text = str(name)
+                slots.setdefault(text, []).append(slot_n)
+                _occupy(occupied, slot_n, text)
         slots = {name: sorted(group) for name, group in slots.items()}
     else:
         slots = {name: [slot] for name, slot in routed.items() if slot > 0}
-    return _Routing(slots=slots, known=known, empty=config.first_empty_slot())
+    return _Routing(
+        slots=slots,
+        known=known,
+        empty=config.first_empty_slot(),
+        occupied=_occupied_pairs(occupied),
+    )
 
 
 def _summary(tally: CatchAllTally) -> str:
@@ -135,8 +185,15 @@ def _summary(tally: CatchAllTally) -> str:
     return f"{caught} in catch-all of {total} sorted ({percent(caught, total)}%)"
 
 
+_ADD_TEXT = "Add to existing slot…"
+_SELECT_TIP = "Select a headstamp."
+_UNKNOWN_TIP = "This label isn't in the model, so it can't be assigned to a slot."
+_NO_OCCUPIED_TIP = "No slot has a headstamp yet."
+_ADD_TIP = "Share a bin that already has brass. Cases already in the wheel still drop in the catch-all."
+
+
 class CatchAllView(QWidget):
-    """The breakdown table and its one-click assign button."""
+    """The breakdown table, the empty-slot assign, and the share-a-bin menu."""
 
     def __init__(self, win: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -184,6 +241,10 @@ class CatchAllView(QWidget):
 
         bar = QHBoxLayout()
         bar.addStretch(1)
+        self.add_button = QPushButton(_ADD_TEXT, self)
+        self.add_button.setObjectName("catchAllAdd")
+        self.add_button.setMenu(QMenu(self.add_button))
+        bar.addWidget(self.add_button)
         self.assign_button = QPushButton("Assign to empty slot", self)
         self.assign_button.setObjectName("action")
         self.assign_button.clicked.connect(self._assign_selected)
@@ -292,8 +353,13 @@ class CatchAllView(QWidget):
         self._routing_cache = None
 
     def _first_assignable_key(self) -> str | None:
-        """The first ranked headstamp the Assign button can still act on."""
-        if self._routing().empty is None:
+        """The first ranked headstamp either bar control can still act on.
+
+        Sharing a bin is still possible when every slot is taken, so a missing
+        empty slot only ends the walk when nothing is occupied either.
+        """
+        routing = self._routing()
+        if routing.empty is None and not routing.occupied:
             return None
         for bucket in self._open_top:
             if self._has_slot(bucket.key) or not self._known(bucket.key):
@@ -379,6 +445,33 @@ class CatchAllView(QWidget):
                 return bucket
         return None
 
+    def _routed_tip(self, key: str, bucket: CatchAllBucket, assigned: list[int]) -> str:
+        where = ", ".join(f"#{slot}" for slot in assigned)
+        noun = "slot" if len(assigned) == 1 else "slots"
+        if set(bucket.reasons) == {BELOW_FLOOR}:
+            return (
+                f"{key} is already routed to {noun} {where}. These cases were below the "
+                "confidence floor, so they stayed in the catch-all."
+            )
+        return f"{key} is already routed to {noun} {where}."
+
+    def _set_add(self, enabled: bool, tip: str) -> None:
+        self.add_button.setEnabled(enabled)
+        self.add_button.setToolTip(tip)
+        if not enabled:
+            menu = self.add_button.menu()
+            if menu is not None:
+                menu.clear()
+
+    def _fill_add_menu(self, occupied: tuple[tuple[int, tuple[str, ...]], ...]) -> None:
+        menu = self.add_button.menu()
+        if menu is None:
+            return
+        menu.clear()
+        for slot, names in occupied:
+            action = menu.addAction(escape_mnemonic(f"#{slot} {', '.join(names)}"))
+            action.triggered.connect(lambda _checked=False, chosen=slot: self._add_selected_to_slot(chosen))
+
     def _update_button(self) -> None:
         button = self.assign_button
         key = self._selected_key
@@ -386,37 +479,51 @@ class CatchAllView(QWidget):
         if key is None or bucket is None:
             button.setEnabled(False)
             button.setText("Assign to empty slot")
-            button.setToolTip("Select a headstamp.")
+            button.setToolTip(_SELECT_TIP)
+            self._set_add(False, _SELECT_TIP)
             return
         if not self._known(key):
             button.setEnabled(False)
             button.setText(escape_mnemonic(f"Assign {key} to empty slot"))
-            button.setToolTip("This label isn't in the model, so it can't be assigned to a slot.")
+            button.setToolTip(_UNKNOWN_TIP)
+            self._set_add(False, _UNKNOWN_TIP)
             return
         assigned = self._assigned_slots(key)
         if assigned:
-            shown = assigned[0]
             button.setEnabled(False)
-            button.setText(f"→ #{shown}")
-            where = ", ".join(f"#{slot}" for slot in assigned)
-            noun = "slot" if len(assigned) == 1 else "slots"
-            if set(bucket.reasons) == {BELOW_FLOOR}:
-                button.setToolTip(
-                    f"{key} is already routed to {noun} {where}. These cases were below the "
-                    "confidence floor, so they stayed in the catch-all."
-                )
-            else:
-                button.setToolTip(f"{key} is already routed to {noun} {where}.")
+            button.setText(f"→ #{assigned[0]}")
+            tip = self._routed_tip(key, bucket, assigned)
+            button.setToolTip(tip)
+            self._set_add(False, tip)
             return
         empty = self._routing().empty
         if empty is None:
             button.setEnabled(False)
             button.setText(escape_mnemonic(f"Assign {key} to empty slot"))
             button.setToolTip("No empty slot left.")
+        else:
+            button.setEnabled(True)
+            button.setText(escape_mnemonic(f"Assign {key} to empty slot #{empty}"))
+            button.setToolTip(
+                f"Put an empty bin in slot {empty}. Cases already in the wheel still drop in the catch-all."
+            )
+        occupied = self._routing().occupied
+        if not occupied:
+            self._set_add(False, _NO_OCCUPIED_TIP)
             return
-        button.setEnabled(True)
-        button.setText(escape_mnemonic(f"Assign {key} to empty slot #{empty}"))
-        button.setToolTip(f"Put an empty bin in slot {empty}. Cases already in the wheel still drop in the catch-all.")
+        self._fill_add_menu(occupied)
+        self.add_button.setEnabled(True)
+        self.add_button.setToolTip(_ADD_TIP)
+
+    def _finish_assign(self, key: str) -> None:
+        # The bus event that drops the cache has not been drained yet, and
+        # the next line has to see the slot this click just wrote.
+        self._invalidate_routing()
+        # A failed assign leaves the row where it was. A successful one moves
+        # the selection to the next headstamp that can still take a bin.
+        self._prefer_next_assignable = self._has_slot(key)
+        self.refresh()
+        self._prefer_next_assignable = False
 
     def _assign_selected(self) -> None:
         key = self._selected_key
@@ -426,15 +533,17 @@ class CatchAllView(QWidget):
         if assign is None:
             return
         assign(key)
-        # The bus event that drops the cache has not been drained yet, and
-        # the next line has to see the slot this click just wrote.
-        self._invalidate_routing()
-        # A failed assign leaves the row where it was. A successful one moves
-        # the selection to the next headstamp that can still take a bin, so
-        # Assign can be clicked straight down the list.
-        self._prefer_next_assignable = self._has_slot(key)
-        self.refresh()
-        self._prefer_next_assignable = False
+        self._finish_assign(key)
+
+    def _add_selected_to_slot(self, slot: int) -> None:
+        key = self._selected_key
+        if not key or not self.add_button.isEnabled():
+            return
+        assign = getattr(self._win, "assign_from_catch_all", None)
+        if assign is None:
+            return
+        assign(key, slot)
+        self._finish_assign(key)
 
 
 def build_catch_all_view(win: Any) -> CatchAllView:
