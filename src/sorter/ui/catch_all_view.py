@@ -9,8 +9,12 @@ The table is items only — no cell widgets (CLAUDE.md §5). It ranks only
 headstamps that would still land in slot 0 if seen now: giving one a slot
 drops its unassigned and unknown cases so the next one moves up. Below
 floor, upside down and batch full stay, and a mixed row shows only that
-remainder. The header stays the physical bin total. A line under the table
-names what left the ranking and how many of those cases are already in bin 0.
+remainder. **Top Ten** (the default) paints the first 10 of that ranking
+plus a greyed Other row. **ALL** paints every one of them, and the table
+scrolls. The two are an exclusive pair; the lit one uses the palette's
+``success`` fill, and the choice lasts for the session. The header stays
+the physical bin total. A line under the table names what left the ranking
+and how many of those cases are already in bin 0.
 
 Two actions sit on the selection bar under the table, keyed on the
 headstamp name so a re-sort does not lose the selection. **Assign to empty
@@ -42,6 +46,8 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QAbstractScrollArea,
+    QButtonGroup,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -191,6 +197,10 @@ def _summary(tally: CatchAllTally) -> str:
     return f"{caught} in catch-all of {total} sorted ({percent(caught, total)}%)"
 
 
+_TOP_TEXT = "Top Ten"
+_ALL_TEXT = "ALL"
+_MODE_TOP = 0
+_MODE_ALL = 1
 _ADD_TEXT = "Add to existing slot…"
 _SELECT_TIP = "Select a headstamp."
 _UNKNOWN_TIP = "This label isn't in the model, so it can't be assigned to a slot."
@@ -224,7 +234,12 @@ class CatchAllView(QWidget):
         self._selected_key: str | None = None
         # Keys assigned away from the ranking, in the order it happened.
         self._session_order: list[str] = []
-        self._open_top: list[CatchAllBucket] = []
+        # Rows on screen: the first 10, or every open key when ALL is lit.
+        # ``_bucket`` searches this, so a row past the tenth can be assigned.
+        self._ranked: list[CatchAllBucket] = []
+        # Top Ten until the user picks ALL. Remembered for this session; the
+        # view lives as long as the window does, including while the dock is closed.
+        self._show_all = False
         # Set for the refresh that follows the panel's own Assign click.
         self._prefer_next_assignable = False
         # Rebuilt on assignment, model change, and reset — not on each result.
@@ -248,6 +263,22 @@ class CatchAllView(QWidget):
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
 
+        modes = QHBoxLayout()
+        modes.setContentsMargins(0, 0, 0, 0)
+        modes.setSpacing(6)
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        self.top_ten_button = self._mode_button(_TOP_TEXT)
+        self.all_button = self._mode_button(_ALL_TEXT)
+        self._mode_group.addButton(self.top_ten_button, _MODE_TOP)
+        self._mode_group.addButton(self.all_button, _MODE_ALL)
+        self.top_ten_button.setChecked(True)
+        self._mode_group.idToggled.connect(self._on_mode_toggled)
+        modes.addWidget(self.top_ten_button)
+        modes.addWidget(self.all_button)
+        modes.addStretch(1)
+        outer.addLayout(modes)
+
         self.summary_label = QLabel(_summary(self.tally), self)
         self.summary_label.setObjectName("catchAllSummary")
         self.summary_label.setWordWrap(True)
@@ -261,6 +292,12 @@ class CatchAllView(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setMinimumHeight(1)
+        # AsNeeded is the Qt default. Spell it out so a later change cannot
+        # turn the bar off, and keep the size hint from growing with the row
+        # count — ALL scrolls inside the dock the user already sized.
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
         header.setStretchLastSection(True)
@@ -394,7 +431,7 @@ class CatchAllView(QWidget):
         self._set_text(self.summary_label, _summary(self.tally))
         self._sync_session_order()
         self._paint_session_line()
-        self._open_top, other = self.tally.open_ranking(self._has_slot)
+        self._ranked, other = self.tally.open_ranking(self._has_slot, None if self._show_all else 10)
         selected = self._first_assignable_key() if self._prefer_next_assignable else self._selected_key
         self._paint_table(selected, other)
         self._update_button()
@@ -424,6 +461,22 @@ class CatchAllView(QWidget):
         text = assigned_session_line(entries)
         self._set_text(self.assigned_label, text)
         self._set_shown(self.assigned_label, bool(text))
+
+    def _mode_button(self, text: str) -> QPushButton:
+        button = QPushButton(text, self)
+        button.setObjectName("catchAllMode")
+        button.setCheckable(True)
+        return button
+
+    def _on_mode_toggled(self, mode_id: int, checked: bool) -> None:
+        """One of the pair lit up. The one turning off is ignored."""
+        if not checked:
+            return
+        show_all = mode_id == _MODE_ALL
+        if show_all == self._show_all:
+            return
+        self._show_all = show_all
+        self.refresh()
 
     def _wrote(self) -> None:
         self._widget_writes += 1
@@ -470,7 +523,7 @@ class CatchAllView(QWidget):
         routing = self._routing()
         if routing.empty is None and not routing.occupied:
             return None
-        for bucket in self._open_top:
+        for bucket in self._ranked:
             if self._has_slot(bucket.key) or not self._known(bucket.key):
                 continue
             return bucket.key
@@ -481,7 +534,7 @@ class CatchAllView(QWidget):
         warning = self._color("warning", _FALLBACK_WARNING).name()
         muted = self._color("text_muted", _FALLBACK_MUTED).name()
         specs: list[_RowPaint] = []
-        for rank, bucket in enumerate(self._open_top, start=1):
+        for rank, bucket in enumerate(self._ranked, start=1):
             below_only = set(bucket.reasons) == {BELOW_FLOOR}
             specs.append(
                 _RowPaint(
@@ -517,7 +570,6 @@ class CatchAllView(QWidget):
         hbar = self.table.horizontalScrollBar()
         v_value, h_value = vbar.value(), hbar.value()
         same_key = selected == self._selected_key
-        row_before = self.table.currentRow()
 
         self.table.blockSignals(True)
         if self.table.rowCount() != len(specs):
@@ -528,9 +580,10 @@ class CatchAllView(QWidget):
         self._move_selection(selected)
         self.table.blockSignals(False)
 
-        # A new case must not yank the list. Moving the highlight onto a
-        # different headstamp (the click that assigns one) may.
-        if same_key and self.table.currentRow() == row_before:
+        # A new case must not yank the list, even when the selected headstamp
+        # moves to another row. Moving the highlight onto a different
+        # headstamp (the click that assigns one) may.
+        if same_key:
             if vbar.value() != v_value:
                 self._wrote()
                 vbar.setValue(v_value)
@@ -641,7 +694,8 @@ class CatchAllView(QWidget):
         return key in self._routing().known
 
     def _bucket(self, key: str) -> CatchAllBucket | None:
-        for bucket in self._open_top:
+        """The on-screen row for ``key``, including a row past the tenth in ALL."""
+        for bucket in self._ranked:
             if bucket.key == key:
                 return bucket
         return None
