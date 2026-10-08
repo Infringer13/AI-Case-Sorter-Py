@@ -77,6 +77,10 @@ def test_a_fresh_panel_is_empty_and_closed(window) -> None:
     assert view._mode_group.exclusive()
     assert not view._show_all
     assert view.table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    row = view.layout().itemAt(0).layout()
+    assert row.itemAt(0).spacerItem() is not None
+    assert row.itemAt(1).widget() is view.top_ten_button
+    assert row.itemAt(2).widget() is view.all_button
 
 
 def test_the_header_matches_the_slot_card_and_ignores_failures(window) -> None:
@@ -660,6 +664,10 @@ def test_all_lists_every_row_and_does_not_resize_the_dock(qapp, window, config) 
     qapp.processEvents()
     size = window.catch_all_dock.size()
     assert size.height() > 0
+    margin = view.layout().contentsMargins().right()
+    assert abs(view.all_button.geometry().right() - (view.width() - margin)) <= 2
+    assert view.top_ten_button.x() > margin
+    assert view.top_ten_button.geometry().right() <= view.all_button.x()
     success = QColor(window.palette_colors["success"])
     assert _near(_fill(view.top_ten_button), success)
     assert not _near(_fill(view.all_button), success)

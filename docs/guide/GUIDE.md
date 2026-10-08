@@ -197,7 +197,7 @@ The header is that count against everything sorted so far ("319 in catch-all
 of 615 sorted (52%)"). It stays the number of cases physically in the bin,
 even after you assign some of them.
 
-**Top Ten** and **ALL**, at the upper left, choose how much of the list you
+**Top Ten** and **ALL**, at the upper right, choose how much of the list you
 see. Exactly one is lit, in the theme's success colour (green on the stock
 dark and light themes); the other stays an ordinary button. The panel opens
 on **Top Ten**. Each row is a headstamp that would still land in the
