@@ -68,6 +68,15 @@ def test_a_fresh_panel_is_empty_and_closed(window) -> None:
     assert view.add_button.toolTip() == "Select a headstamp."
     assert _menu_texts(view) == []
     assert view.assigned_label.isHidden()
+    assert view.top_ten_button.text() == "Top Ten"
+    assert view.all_button.text() == "ALL"
+    assert view.top_ten_button.objectName() == "catchAllMode"
+    assert view.all_button.objectName() == "catchAllMode"
+    assert view.top_ten_button.isChecked()
+    assert not view.all_button.isChecked()
+    assert view._mode_group.exclusive()
+    assert not view._show_all
+    assert view.table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
 
 
 def test_the_header_matches_the_slot_card_and_ignores_failures(window) -> None:
@@ -618,6 +627,157 @@ def test_a_new_case_keeps_the_table_scroll_position(window, config) -> None:
     _post(window, label="BPS")
 
     assert bar.value() == 17
+
+
+def _near(got: QColor, want: QColor, tol: int = 8) -> bool:
+    return max(abs(got.red() - want.red()), abs(got.green() - want.green()), abs(got.blue() - want.blue())) <= tol
+
+
+def _fill(button) -> QColor:
+    """A pixel in the left padding, clear of the border and the label."""
+    image = button.grab().toImage()
+    assert image.width() > 16 and image.height() > 4
+    return image.pixelColor(8, image.height() // 2)
+
+
+def _seed_past_ten(config) -> None:
+    assignments = {f"H{index:02d}": 0 for index in range(13)}
+    assignments["WMA"] = 4
+    seed_model(config, assignments)
+
+
+def test_all_lists_every_row_and_does_not_resize_the_dock(qapp, window, config) -> None:
+    _seed_past_ten(config)
+    for index in range(13):
+        _post(window, label=f"H{index:02d}")
+    view = window.catch_all_view
+    assert _names(view) == [f"H{index:02d}" for index in range(10)]
+    assert view.table.item(10, COL_NAME).text() == "Other: 3 headstamps, 3 cases"
+
+    window.resize(1200, 800)
+    window.show()
+    window.reveal_dock(window.catch_all_dock)
+    qapp.processEvents()
+    size = window.catch_all_dock.size()
+    assert size.height() > 0
+    success = QColor(window.palette_colors["success"])
+    assert _near(_fill(view.top_ten_button), success)
+    assert not _near(_fill(view.all_button), success)
+
+    view.all_button.click()
+    qapp.processEvents()
+
+    assert window.catch_all_dock.size() == size
+    assert view.all_button.isChecked()
+    assert not view.top_ten_button.isChecked()
+    assert _names(view) == [f"H{index:02d}" for index in range(13)]
+    assert view.table.rowCount() == 13
+    assert _near(_fill(view.all_button), success)
+    assert not _near(_fill(view.top_ten_button), success)
+    view.table.setFixedHeight(48)
+    qapp.processEvents()
+    assert view.table.verticalScrollBar().maximum() > 0
+
+    view.top_ten_button.click()
+    assert view.top_ten_button.isChecked()
+    assert not view._show_all
+    assert view.table.rowCount() == 11
+    assert view.table.item(10, COL_NAME).text() == "Other: 3 headstamps, 3 cases"
+
+
+def test_assign_and_add_reach_a_row_past_the_tenth(window, config) -> None:
+    _seed_past_ten(config)
+    for index in range(13):
+        _post(window, label=f"H{index:02d}")
+    view = window.catch_all_view
+    assert "H12" not in _names(view)
+
+    view.all_button.click()
+    _select(view, "H12")
+    assert view.assign_button.isEnabled()
+    assert view.assign_button.text() == "Assign H12 to empty slot #1"
+    view.assign_button.click()
+    assert config.slot_for_headstamp("H12") == 1
+    assert "H12" not in _names(view)
+    assert view.all_button.isChecked()
+
+    _select(view, "H11")
+    assert view.add_button.isEnabled()
+    menu = view.add_button.menu()
+    assert menu is not None
+    chosen = next(action for action in menu.actions() if action.data() == 4)
+    chosen.trigger()
+    assert config.slot_for_headstamp("H11") == 4
+    assert "H11" not in _names(view)
+    assert "H11" in window.slot_grid.cards[4].names_label.text()
+
+    view.top_ten_button.click()
+    assert "H10" not in _names(view)
+    assert view.table.item(view.table.rowCount() - 1, COL_NAME).text() == "Other: 1 headstamps, 1 cases"
+
+
+def test_all_mode_keeps_scroll_and_an_open_menu(window, config) -> None:
+    _seed_past_ten(config)
+    for index in range(13):
+        _post(window, label=f"H{index:02d}")
+    view = window.catch_all_view
+    view.all_button.click()
+    _select(view, "H12")
+    bar = view.table.verticalScrollBar()
+    bar.setRange(0, 80)
+    bar.setValue(23)
+    menu = view.add_button.menu()
+    assert menu is not None
+    menu.show()
+    actions = menu.actions()
+
+    _post(window, label="H00")
+    _post(window, label="H00")
+
+    assert menu.isVisible()
+    assert menu.actions() == actions
+    assert view.summary_label.text() == "13 in catch-all of 13 sorted (100%)"
+    assert bar.value() == 23
+    assert view._selected_key == "H12"
+
+    menu.close()
+    assert view.summary_label.text() == "15 in catch-all of 15 sorted (100%)"
+    assert view.table.item(_row(view, "H00"), 2).text() == "3"
+    assert bar.value() == 23
+    assert view._selected_key == "H12"
+    writes = view._widget_writes
+    items = [
+        view.table.item(row, column)
+        for row in range(view.table.rowCount())
+        for column in range(view.table.columnCount())
+    ]
+    view.refresh()
+    assert view._widget_writes == writes
+    assert bar.value() == 23
+    assert [
+        view.table.item(row, column)
+        for row in range(view.table.rowCount())
+        for column in range(view.table.columnCount())
+    ] == items
+
+
+def test_the_list_mode_survives_reset_and_a_theme_change(window) -> None:
+    _post(window, label="BPS")
+    view = window.catch_all_view
+    view.all_button.click()
+    window.set_theme("Light")
+    assert view.all_button.isChecked()
+    assert view._show_all
+    assert _names(view) == ["BPS"]
+
+    window.reset_counts()
+
+    assert view.all_button.isChecked()
+    assert view._show_all
+    assert _names(view) == []
+    view.top_ten_button.click()
+    assert view.top_ten_button.isChecked()
+    assert not view._show_all
 
 
 def test_reset_clears_the_assigned_line(window, config) -> None:
