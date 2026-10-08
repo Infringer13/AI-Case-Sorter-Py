@@ -1765,30 +1765,41 @@ class QtMainWindow(QMainWindow):
             reset()
         self.set_status("Counters reset.")
 
-    def assign_from_catch_all(self, key: str) -> None:
-        """One-click assign from the Catch-All panel.
+    def assign_from_catch_all(self, key: str, slot: int | None = None) -> None:
+        """Assign from the Catch-All panel.
 
-        The slot a case will use is fixed when it is classified, so doing
-        this mid-run is safe: only an empty slot is filled, and cases already
-        in the wheel still drop in the catch-all. The active template follows
-        because ``assign_label_to_empty_slot`` goes through the setters.
+        ``slot`` None fills the first empty bin. A slot number shares that
+        bin with the headstamps already there. The slot a case will use is
+        fixed when it is classified, so doing this mid-run is safe: cases
+        already in the wheel still drop in the catch-all. The active template
+        follows because both writers go through the setters.
         """
-        slot = self.config.assign_label_to_empty_slot(key)
         if slot is None:
+            placed = self.config.assign_label_to_empty_slot(key)
+            sharing = False
+        else:
+            placed = self.config.assign_label_to_slot(key, slot)
+            sharing = True
+        if placed is None:
             return
         log.info(
             "slot assignment: %r -> slot %d (source=catch_all, running=%s)",
             key,
-            slot,
+            placed,
             self._is_running,
         )
         self.bus.post(
             "run/assignment_changed",
-            {"label": key, "slot": slot, "source": "catch_all"},
+            {"label": key, "slot": placed, "source": "catch_all"},
         )
         self._refresh_sort_grid()
+        if sharing:
+            self.set_status(
+                f"{key} → Slot {placed}, sharing that bin. Cases already in the wheel still drop in the catch-all."
+            )
+            return
         self.set_status(
-            f"{key} → Slot {slot}. Put an empty bin there; cases already in the wheel still drop in the catch-all."
+            f"{key} → Slot {placed}. Put an empty bin there; cases already in the wheel still drop in the catch-all."
         )
 
     def reset_slot_count(self, slot: int) -> None:
