@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from unittest.mock import patch
 
 import pytest
 
@@ -347,6 +348,24 @@ def test_assigning_from_the_panel_selects_the_new_top_row(window, config) -> Non
     assert _names(view) == ["SIG"]
     assert view._selected_key == "SIG"
     assert view.assigned_label.text() == ("Assigned this session: BPS → #1 (3 already in bin 0), IK → #2 (2)")
+
+
+def test_results_reuse_the_slot_map_until_an_assignment(window, config) -> None:
+    seed_model(config, {"BPS": 0, "IK": 0})
+    view = window.catch_all_view
+    with patch.object(config.headstamps_repo, "list_for_model", wraps=config.headstamps_repo.list_for_model) as listed:
+        _post(window, label="BPS")
+        warmed = listed.call_count
+        assert warmed > 0
+        _post(window, label="IK")
+        _post(window, label="BPS")
+        assert listed.call_count == warmed
+
+        config.set_headstamp_slot("BPS", 6)
+        window.bus.post("run/assignment_changed", {"label": "BPS", "slot": 6, "source": "editor"})
+        window.bus.drain()
+    assert "BPS" not in _names(view)
+    assert "IK" in _names(view)
 
 
 def test_reset_clears_the_assigned_line(window, config) -> None:
