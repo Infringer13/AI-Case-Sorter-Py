@@ -11,8 +11,9 @@ drops its unassigned and unknown cases so the next one moves up. Below
 floor, upside down and batch full stay, and a mixed row shows only that
 remainder. **Top Ten** (the default) paints the first 10 of that ranking
 plus a greyed Other row. **ALL** paints every one of them, and the table
-scrolls. The two are an exclusive pair; the lit one uses the palette's
-``success`` fill, and the choice lasts for the session. The header stays
+scrolls. The two are an exclusive pair at the upper right of the panel;
+the lit one uses the palette's ``success`` fill, and the choice lasts for
+the session. The header stays
 the physical bin total. A line under the table names what left the ranking
 and how many of those cases are already in bin 0.
 
@@ -274,9 +275,9 @@ class CatchAllView(QWidget):
         self._mode_group.addButton(self.all_button, _MODE_ALL)
         self.top_ten_button.setChecked(True)
         self._mode_group.idToggled.connect(self._on_mode_toggled)
+        modes.addStretch(1)
         modes.addWidget(self.top_ten_button)
         modes.addWidget(self.all_button)
-        modes.addStretch(1)
         outer.addLayout(modes)
 
         self.summary_label = QLabel(_summary(self.tally), self)
