@@ -11,8 +11,11 @@ from sorter.control.catch_all import (
     UNASSIGNED,
     UNKNOWN,
     CatchAllTally,
+    assigned_session_line,
     classify_reason,
+    fixed_by_assignment,
     is_special_label,
+    open_bucket,
     percent,
     reason_summary,
     reason_tooltip,
@@ -127,6 +130,80 @@ def test_reason_summary_and_tooltip() -> None:
     alone.add(_ok(reason=SPECIAL, label="UPSIDE DOWN"))
     assert reason_summary(alone.top()[0]) == "Upside down"
     assert reason_tooltip(alone.top()[0]) == "Upside down: 1"
+
+
+def test_open_ranking_drops_assigned_unassigned_and_unknown_cases() -> None:
+    tally = CatchAllTally()
+    for _ in range(10):
+        tally.add(_ok(label="BPS", reason=UNASSIGNED))
+    tally.add(_ok(label="BPS", reason=BELOW_FLOOR))
+    for _ in range(3):
+        tally.add(_ok(label="IK", reason=UNASSIGNED))
+    tally.add(_ok(label="GHOST", reason=UNKNOWN))
+    tally.add(_ok(label="UPSIDE DOWN", reason=SPECIAL))
+    tally.add(_ok(label="CBC", reason=BATCH_FULL))
+
+    def has_slot(key: str) -> bool:
+        return key in {"BPS", "GHOST", "UPSIDE DOWN", "CBC"}
+
+    top, other = tally.open_ranking(has_slot)
+    by_key = {bucket.key: bucket for bucket in top}
+    # The bin does not fix below floor, upside down, or a full batch.
+    assert by_key["BPS"].count == 1
+    assert by_key["BPS"].reasons == {BELOW_FLOOR: 1}
+    assert "UPSIDE DOWN" in by_key and by_key["UPSIDE DOWN"].count == 1
+    assert by_key["CBC"].reasons == {BATCH_FULL: 1}
+    # Unknown leaves once it has a slot. IK has no slot, so it stays whole.
+    assert "GHOST" not in by_key
+    assert by_key["IK"].count == 3
+    # Remaining counts re-rank: IK's 3 beat BPS's leftover 1.
+    assert [bucket.key for bucket in top][:2] == ["IK", "BPS"]
+    assert other == (0, 0)
+    # The physical total is unchanged.
+    assert tally.catch_all_total == 17
+    assert fixed_by_assignment(tally.buckets()[0]) == 10
+
+    # Unassigning brings the full row back.
+    again, _rest = tally.open_ranking(lambda _key: False)
+    restored = next(bucket for bucket in again if bucket.key == "BPS")
+    assert restored.count == 11
+    assert restored.reasons[UNASSIGNED] == 10
+
+
+def test_open_ranking_promotes_the_next_headstamp_into_the_top_ten() -> None:
+    tally = CatchAllTally()
+    for index in range(12):
+        for _ in range(12 - index):
+            tally.add(_ok(label=f"H{index:02d}"))
+    top, other = tally.open_ranking(lambda key: key == "H00")
+    assert [bucket.key for bucket in top] == [f"H{index:02d}" for index in range(1, 11)]
+    assert other == (1, 1)
+    assert open_bucket(tally.buckets()[0], has_slot=True) is None
+
+
+def test_a_reduced_bucket_does_not_keep_child_labels() -> None:
+    tally = CatchAllTally()
+    tally.add(_ok(label="WIN", parent="Brass", reason=UNASSIGNED))
+    tally.add(_ok(label="FC", parent="Brass", reason=BELOW_FLOOR))
+    original = tally.top()[0]
+    reduced = open_bucket(original, has_slot=True)
+    assert reduced is not None
+    assert reduced.count == 1
+    assert reduced.children == {}
+    assert reason_summary(reduced) == "Below floor"
+    assert "Labels:" not in reason_tooltip(reduced)
+    # Nothing was fixed, so the original bucket (and its children) stay.
+    assert open_bucket(original, has_slot=False) is original
+
+
+def test_assigned_session_line() -> None:
+    assert assigned_session_line([]) == ""
+    assert assigned_session_line([("BPS", [], 4)]) == ""
+    assert assigned_session_line([("BPS", [6], 42)]) == "Assigned this session: BPS → #6 (42 already in bin 0)"
+    assert (
+        assigned_session_line([("BPS", [6], 42), ("IK", [7], 17)])
+        == "Assigned this session: BPS → #6 (42 already in bin 0), IK → #7 (17)"
+    )
 
 
 def test_reset_clears_totals_and_buckets() -> None:
