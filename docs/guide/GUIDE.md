@@ -194,8 +194,10 @@ card on the [slot grid](#slot-cards). It shows how many cases went there
 this session, which headstamps they were, and why.
 
 The header is that count against everything sorted so far ("319 in catch-all
-of 615 sorted (52%)"). The table lists the ten headstamps that landed there
-most, with each one's count, its share of the catch-all, and the reason:
+of 615 sorted (52%)"). It stays the number of cases physically in the bin,
+even after you assign some of them. The table lists the ten headstamps that
+would still land there if they were seen now, with each one's remaining
+count, its share of the catch-all, and the reason:
 
 - **Below floor** — the prediction did not reach the [confidence
   floor](#run-options). This is the only reason drawn in the warning colour.
@@ -206,18 +208,32 @@ most, with each one's count, its share of the catch-all, and the reason:
 - **Batch full** — [package mode](#package-mode), and every slot for that
   headstamp was already full.
 
-Anything past the top ten is one greyed **Other** row ("Other: 2 headstamps,
+Anything past those ten is one greyed **Other** row ("Other: 2 headstamps,
 4 cases"). It cannot be selected. A headstamp grouped under a parent is
 listed as the parent; point at the reason and the tooltip names the child
 labels and the full count of each reason.
 
+Giving a headstamp a slot — from this panel, from a slot card, or from
+**Assign by headstamp** — takes it off that list, and the next one moves up.
+That only removes the **Unassigned** cases, and an **Unknown** label that
+now has a slot. **Below floor**, **Upside down** and **Batch full** stay,
+because a bin does not fix them; a row that was a mix of those and
+unassigned cases shrinks to the part that is left. Take the slot away again
+and the headstamp comes back at its full count.
+
+Under the table, a line keeps what left the list: "Assigned this session:
+BPS → #6 (42 already in bin 0), IK → #7 (17)". Those cases are still in the
+Catch-All bin; the next run is what puts them in the new slot. **Reset
+counts** clears the line with the rest of the tally.
+
 **Assign {name} to empty slot #N**, under the table, puts the selected
-headstamp in the first empty bin. The button is unavailable, and says why,
-when nothing is selected, when there is no empty slot, when the label is
-unknown, or when it already has a slot — the button then reads **→ #N**. A
-row that is only below the confidence floor, for a headstamp that already
-has a slot, is the same: those cases missed the floor, and assigning them
-again would not move them.
+headstamp in the first empty bin and then selects the next headstamp the
+button can still assign, so you can work down the list. The button is
+unavailable, and says why, when nothing is selected, when there is no empty
+slot, when the label is unknown, or when it already has a slot — the button
+then reads **→ #N**. A row that is only below the confidence floor, for a
+headstamp that already has a slot, is the same: those cases missed the
+floor, and assigning them again would not move them.
 
 You can assign during a run. The case already in the wheel still drops in
 the Catch-All; put an empty bin in the slot you just filled, and the next

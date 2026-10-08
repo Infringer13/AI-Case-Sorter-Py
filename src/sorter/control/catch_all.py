@@ -8,6 +8,7 @@ on ``run/result``.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from typing import Any
 
 # Destination.reason. ``routed`` is a real bin; everything else is slot 0.
@@ -19,6 +20,10 @@ SPECIAL = "special"  # unassigned label in CATCH_ALL_LABELS
 BATCH_FULL = "batch_full"  # package mode: every configured slot is full
 
 REASONS = (ROUTED, BELOW_FLOOR, UNASSIGNED, UNKNOWN, SPECIAL, BATCH_FULL)
+
+# A bin fixes these and nothing else. Below floor, upside down, and a full
+# batch still land in slot 0 after the headstamp is given a slot.
+FIXED_BY_ASSIGNMENT = frozenset({UNASSIGNED, UNKNOWN})
 
 # Trained classes that are expected to have no bin of their own. Matched
 # case-insensitively against the classifier's label. "UPSIDE DOWN" is a
@@ -131,13 +136,43 @@ class CatchAllTally:
         return sorted(self._buckets.values(), key=lambda bucket: (-bucket.count, bucket.key.casefold()))
 
     def top(self, n: int = 10) -> list[CatchAllBucket]:
-        """The ``n`` fullest keys, highest count first, name as the tie-break."""
+        """The ``n`` fullest keys, highest count first, name as the tie-break.
+
+        This is the historical ranking, every catch-all case included.
+        :meth:`open_ranking` is what the panel paints: keys that would still
+        land in slot 0 if they were seen now.
+        """
         return self._ordered()[: max(0, n)]
 
     def other(self) -> tuple[int, int]:
         """Keys past :meth:`top`'s default 10, as ``(n_keys, n_cases)``."""
         rest = self._ordered()[10:]
         return len(rest), sum(bucket.count for bucket in rest)
+
+    def buckets(self) -> list[CatchAllBucket]:
+        """Every catch-all key, in the order cases first introduced them."""
+        return list(self._buckets.values())
+
+    def open_ranking(
+        self, has_slot: Callable[[str], bool], n: int = 10
+    ) -> tuple[list[CatchAllBucket], tuple[int, int]]:
+        """Keys that would still land in slot 0, and the rest past ``n``.
+
+        ``has_slot`` is the live assignment, not the slot the case took when
+        it was sorted. An assigned key drops its unassigned and unknown
+        cases; below-floor, upside-down and batch-full cases stay, and a key
+        with nothing left is omitted. The second value is ``(n_keys, n_cases)``
+        for everything past the first ``n``, same shape as :meth:`other`.
+        """
+        visible: list[CatchAllBucket] = []
+        for bucket in self._buckets.values():
+            shown = open_bucket(bucket, has_slot=bool(has_slot(bucket.key)))
+            if shown is not None:
+                visible.append(shown)
+        visible.sort(key=lambda bucket: (-bucket.count, bucket.key.casefold()))
+        limit = max(0, n)
+        rest = visible[limit:]
+        return visible[:limit], (len(rest), sum(bucket.count for bucket in rest))
 
     @property
     def total(self) -> int:
@@ -151,6 +186,57 @@ class CatchAllTally:
         self._total = 0
         self._catch_all = 0
         self._buckets.clear()
+
+
+def fixed_by_assignment(bucket: CatchAllBucket) -> int:
+    """Cases a new slot would have sent to a bin: unassigned and unknown."""
+    return sum(count for reason, count in bucket.reasons.items() if reason in FIXED_BY_ASSIGNMENT)
+
+
+def open_bucket(bucket: CatchAllBucket, *, has_slot: bool) -> CatchAllBucket | None:
+    """The part of ``bucket`` that would still land in slot 0.
+
+    With no slot the bucket is unchanged. With a slot, unassigned and unknown
+    cases drop out. Below floor, upside down and batch full stay, because a
+    bin does not fix them. None when nothing remains. A reduced bucket does
+    not carry child-label counts: those are not split by reason, so they
+    would claim labels for cases that have left the row.
+    """
+    if bucket.count <= 0:
+        return None
+    if not has_slot:
+        return bucket
+    kept = {
+        reason: count for reason, count in bucket.reasons.items() if reason not in FIXED_BY_ASSIGNMENT and count > 0
+    }
+    if not kept:
+        return None
+    if sum(kept.values()) == bucket.count:
+        return bucket
+    visible = CatchAllBucket(bucket.key)
+    visible.reasons = kept
+    visible.count = sum(kept.values())
+    return visible
+
+
+def assigned_session_line(entries: Sequence[tuple[str, Sequence[int], int]]) -> str:
+    """``Assigned this session: BPS → #6 (42 already in bin 0), IK → #7 (17)``.
+
+    Each entry is ``(key, slots, cases already in bin 0)``. The first names
+    the bin; later entries keep the count. Empty when nothing was assigned
+    away from the ranking.
+    """
+    shown = [(key, [int(slot) for slot in slots], int(count)) for key, slots, count in entries if slots and count > 0]
+    if not shown:
+        return ""
+    parts: list[str] = []
+    for index, (key, slots, count) in enumerate(shown):
+        where = ", ".join(f"#{slot}" for slot in slots)
+        if index == 0:
+            parts.append(f"{key} → {where} ({count} already in bin 0)")
+        else:
+            parts.append(f"{key} → {where} ({count})")
+    return "Assigned this session: " + ", ".join(parts)
 
 
 def percent(part: int, whole: int) -> int:

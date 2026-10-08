@@ -849,9 +849,16 @@ Docks: `serial_monitor.py`, `history_view.py`, `catch_all_view.py`,
 The Catch-All dock follows the history dock: right-hand, closed at startup,
 `scroll_area=False`, in `DOCK_HOMES`, View → "Catch-All breakdown". It
 tallies successful `run/result` events (the same gate as the slot 0 card)
-and `run/assignment_changed`, resets from `_clear_counts`, and keeps its
-counts across Stop/Start. The assign button is a selection-bar `#action`
-control — items only in the table, selection kept by headstamp key.
+and re-ranks on `run/assignment_changed`. The header stays the physical slot
+0 total. The table ranks only keys that would still land in slot 0: a new
+slot drops that key's `unassigned` and `unknown` cases (they come back if
+the slot is cleared), while `below_floor`, `special` and `batch_full` stay
+and a mixed row shows only the remainder. A line under the table
+("Assigned this session: …") names what left and how many cases are already
+in bin 0; `_clear_counts` clears it with the tally. Counts survive
+Stop/Start. The assign button is a selection-bar `#action` control — items
+only in the table, selection kept by headstamp key — and a successful
+assign from the panel selects the next key the button can still assign.
 Dialogs are `dialog_*.py`.
 
 ### Conventions, each one load-bearing

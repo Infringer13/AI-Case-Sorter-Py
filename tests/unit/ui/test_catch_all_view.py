@@ -36,6 +36,15 @@ def _select(view, key: str) -> None:
     view.table.setCurrentCell(_row(view, key), COL_NAME)
 
 
+def _names(view) -> list[str]:
+    names = []
+    for row in range(view.table.rowCount()):
+        item = view.table.item(row, COL_NAME)
+        if item is not None and item.flags() & Qt.ItemFlag.ItemIsSelectable:
+            names.append(item.text())
+    return names
+
+
 def test_a_fresh_panel_is_empty_and_closed(window) -> None:
     view = window.catch_all_view
     assert window.catch_all_dock.isClosed()
@@ -45,6 +54,7 @@ def test_a_fresh_panel_is_empty_and_closed(window) -> None:
     assert not view.assign_button.isEnabled()
     assert view.assign_button.text() == "Assign to empty slot"
     assert view.assign_button.toolTip() == "Select a headstamp."
+    assert view.assigned_label.isHidden()
 
 
 def test_the_header_matches_the_slot_card_and_ignores_failures(window) -> None:
@@ -205,21 +215,33 @@ def test_assign_is_disabled_when_every_slot_is_taken(window, config) -> None:
     assert view.assign_button.toolTip() == "No empty slot left."
 
 
-def test_an_external_assignment_updates_the_button(window, config) -> None:
-    seed_model(config, {"BPS": 0})
-    _post(window, label="BPS")
+def test_an_external_assignment_drops_the_row_and_keeps_the_bin_total(window, config) -> None:
+    seed_model(config, {"BPS": 0, "IK": 0})
+    for _ in range(4):
+        _post(window, label="BPS")
+    _post(window, label="IK")
     view = window.catch_all_view
     _select(view, "BPS")
-    assert view.assign_button.isEnabled()
 
-    config.set_headstamp_slot("BPS", 2)
-    window.bus.post("run/assignment_changed", {"label": "BPS", "slot": 2, "source": "editor"})
+    config.set_headstamp_slot("BPS", 6)
+    window.bus.post("run/assignment_changed", {"label": "BPS", "slot": 6, "source": "editor"})
     window.bus.drain()
 
-    assert view._selected_key == "BPS"
-    assert not view.assign_button.isEnabled()
-    assert view.assign_button.text() == "→ #2"
-    assert "confidence floor" not in view.assign_button.toolTip()
+    assert view.summary_label.text() == "5 in catch-all of 5 sorted (100%)"
+    assert window.slot_grid.cards[0].count_label.text() == "5"
+    assert _names(view) == ["IK"]
+    assert view._selected_key is None
+    assert view.assign_button.text() == "Assign to empty slot"
+    assert view.assigned_label.text() == "Assigned this session: BPS → #6 (4 already in bin 0)"
+    assert not view.assigned_label.isHidden()
+
+    config.set_headstamp_slot("BPS", 0)
+    window.bus.post("run/assignment_changed", {"label": "BPS", "slot": 0, "source": "editor"})
+    window.bus.drain()
+
+    assert _names(view) == ["BPS", "IK"]
+    assert view.table.item(_row(view, "BPS"), 2).text() == "4"
+    assert view.assigned_label.isHidden()
 
 
 def test_assigning_mid_run_fills_an_empty_slot_and_says_so(window, config, caplog) -> None:
@@ -241,8 +263,12 @@ def test_assigning_mid_run_fills_an_empty_slot_and_says_so(window, config, caplo
         "BPS → Slot 1. Put an empty bin there; cases already in the wheel still drop in the catch-all."
     )
     assert events and events[-1] == {"label": "BPS", "slot": 1, "source": "catch_all"}
-    assert view.assign_button.text() == "→ #1"
-    assert not view.assign_button.isEnabled()
+    assert _names(view) == []
+    assert view.summary_label.text() == "1 in catch-all of 1 sorted (100%)"
+    assert window.slot_grid.cards[0].count_label.text() == "1"
+    assert view.assigned_label.text() == "Assigned this session: BPS → #1 (1 already in bin 0)"
+    assert view._selected_key is None
+    assert view.assign_button.text() == "Assign to empty slot"
     assert "BPS" in window.slot_grid.cards[1].names_label.text()
 
 
@@ -264,4 +290,75 @@ def test_assigning_a_parent_row_writes_the_parent_slot(window, config) -> None:
     assert parent is not None and parent.slot == 1
     child = next(h for h in HeadstampRepo(config.db).list_for_model(mid) if h.name == "WIN")
     assert child.slot == 3
-    assert view.assign_button.text() == "→ #1"
+    assert _names(view) == []
+    assert view.assigned_label.text() == "Assigned this session: Brass → #1 (1 already in bin 0)"
+    assert view.assign_button.text() == "Assign to empty slot"
+
+
+def test_a_mixed_row_keeps_only_what_a_slot_does_not_fix(window, config) -> None:
+    seed_model(config, {"BPS": 0, "IK": 0})
+    for _ in range(3):
+        _post(window, label="BPS", reason="unassigned")
+    for _ in range(2):
+        _post(window, label="BPS", reason="below_floor")
+    _post(window, label="IK", reason="unassigned")
+    view = window.catch_all_view
+    _select(view, "BPS")
+
+    view.assign_button.click()
+
+    assert view.summary_label.text() == "6 in catch-all of 6 sorted (100%)"
+    assert window.slot_grid.cards[0].count_label.text() == "6"
+    assert _names(view) == ["BPS", "IK"]
+    assert view.table.item(_row(view, "BPS"), 2).text() == "2"
+    assert view.table.item(_row(view, "BPS"), COL_REASON).text() == "Below floor"
+    assert view.assigned_label.text() == "Assigned this session: BPS → #1 (3 already in bin 0)"
+    # The leftover row cannot be assigned again, so the click moves on.
+    assert view._selected_key == "IK"
+    assert view.assign_button.text() == "Assign IK to empty slot #2"
+
+    config.set_headstamp_slot("BPS", 0)
+    window.bus.post("run/assignment_changed", {"label": "BPS", "slot": 0, "source": "editor"})
+    window.bus.drain()
+
+    assert view.table.item(_row(view, "BPS"), 2).text() == "5"
+    assert view.assigned_label.isHidden()
+
+
+def test_assigning_from_the_panel_selects_the_new_top_row(window, config) -> None:
+    seed_model(config, {"BPS": 0, "IK": 0, "SIG": 0})
+    for _ in range(3):
+        _post(window, label="BPS")
+    for _ in range(2):
+        _post(window, label="IK")
+    _post(window, label="SIG")
+    view = window.catch_all_view
+    _select(view, "BPS")
+
+    view.assign_button.click()
+
+    assert _names(view) == ["IK", "SIG"]
+    assert view._selected_key == "IK"
+    assert view.assign_button.isEnabled()
+    assert view.assign_button.text() == "Assign IK to empty slot #2"
+
+    view.assign_button.click()
+
+    assert _names(view) == ["SIG"]
+    assert view._selected_key == "SIG"
+    assert view.assigned_label.text() == ("Assigned this session: BPS → #1 (3 already in bin 0), IK → #2 (2)")
+
+
+def test_reset_clears_the_assigned_line(window, config) -> None:
+    seed_model(config, {"BPS": 0})
+    _post(window, label="BPS")
+    view = window.catch_all_view
+    _select(view, "BPS")
+    view.assign_button.click()
+    assert not view.assigned_label.isHidden()
+
+    window.reset_counts()
+
+    assert view.tally.catch_all_total == 0
+    assert view.assigned_label.isHidden()
+    assert _names(view) == []
