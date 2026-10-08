@@ -227,13 +227,22 @@ Catch-All bin; the next run is what puts them in the new slot. **Reset
 counts** clears the line with the rest of the tally.
 
 **Assign {name} to empty slot #N**, under the table, puts the selected
-headstamp in the first empty bin and then selects the next headstamp the
-button can still assign, so you can work down the list. The button is
+headstamp in the first empty bin and then selects the next headstamp that
+can still be assigned, so you can work down the list. The button is
 unavailable, and says why, when nothing is selected, when there is no empty
 slot, when the label is unknown, or when it already has a slot — the button
 then reads **→ #N**. A row that is only below the confidence floor, for a
 headstamp that already has a slot, is the same: those cases missed the
 floor, and assigning them again would not move them.
+
+**Add to existing slot…**, beside that button, lists the bins that already
+have brass ("#4 WMA, WMA NATO"), in slot order. Pick one and the selected
+headstamp shares that bin with whatever is already there — useful when a
+headstamp shows up rarely and does not need a bin of its own. It is
+unavailable, and says why, when nothing is selected, when the label is
+unknown, when it already has a slot, or when no slot has a headstamp yet.
+Assign to empty slot stays the main button. Either choice selects the next
+headstamp that can still be assigned.
 
 You can assign during a run. The case already in the wheel still drops in
 the Catch-All; put an empty bin in the slot you just filled, and the next

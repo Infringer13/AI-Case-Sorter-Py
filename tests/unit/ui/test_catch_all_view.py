@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QKeySequence
 
 from sorter.data.repository import HeadstampParentRepo, HeadstampRepo
-from sorter.ui.catch_all_view import COL_NAME, COL_REASON, COLUMNS
+from sorter.ui.catch_all_view import _ADD_TEXT, COL_NAME, COL_REASON, COLUMNS
 
 from .conftest import seed_model
 
@@ -37,6 +37,12 @@ def _select(view, key: str) -> None:
     view.table.setCurrentCell(_row(view, key), COL_NAME)
 
 
+def _menu_texts(view) -> list[str]:
+    menu = view.add_button.menu()
+    assert menu is not None
+    return [action.text() for action in menu.actions()]
+
+
 def _names(view) -> list[str]:
     names = []
     for row in range(view.table.rowCount()):
@@ -55,6 +61,12 @@ def test_a_fresh_panel_is_empty_and_closed(window) -> None:
     assert not view.assign_button.isEnabled()
     assert view.assign_button.text() == "Assign to empty slot"
     assert view.assign_button.toolTip() == "Select a headstamp."
+    assert view.assign_button.objectName() == "action"
+    assert not view.add_button.isEnabled()
+    assert view.add_button.text() == _ADD_TEXT
+    assert view.add_button.objectName() == "catchAllAdd"
+    assert view.add_button.toolTip() == "Select a headstamp."
+    assert _menu_texts(view) == []
     assert view.assigned_label.isHidden()
 
 
@@ -182,26 +194,37 @@ def test_assign_button_states(window, config) -> None:
     assert not view.assign_button.isEnabled()
     assert view.assign_button.text() == "Assign GHOST to empty slot"
     assert "isn't in the model" in view.assign_button.toolTip()
+    assert not view.add_button.isEnabled()
+    assert "isn't in the model" in view.add_button.toolTip()
+    assert _menu_texts(view) == []
 
     _select(view, "WIN")
     assert not view.assign_button.isEnabled()
     assert view.assign_button.text() == "→ #4"
     assert "confidence floor" in view.assign_button.toolTip()
     assert "slot #4" in view.assign_button.toolTip()
+    assert not view.add_button.isEnabled()
+    assert view.add_button.toolTip() == view.assign_button.toolTip()
 
-    # Below the floor, but not yet routed: still assignable.
+    # Below the floor, but not yet routed: still assignable, and WIN occupies #4.
     _select(view, "BPS")
     assert view.assign_button.isEnabled()
     assert view.assign_button.text() == "Assign BPS to empty slot #1"
+    assert view.add_button.isEnabled()
+    assert _menu_texts(view) == ["#4 WIN"]
 
     _select(view, "UPSIDE DOWN")
     assert view.assign_button.isEnabled()
     assert view.assign_button.text() == "Assign UPSIDE DOWN to empty slot #1"
+    assert view.add_button.isEnabled()
+    assert _menu_texts(view) == ["#4 WIN"]
 
     _post(window, label="")
     _select(view, "(empty)")
     assert not view.assign_button.isEnabled()
     assert "isn't in the model" in view.assign_button.toolTip()
+    assert not view.add_button.isEnabled()
+    assert "isn't in the model" in view.add_button.toolTip()
 
 
 def test_assign_is_disabled_when_every_slot_is_taken(window, config) -> None:
@@ -214,6 +237,135 @@ def test_assign_is_disabled_when_every_slot_is_taken(window, config) -> None:
     assert not view.assign_button.isEnabled()
     assert view.assign_button.text() == "Assign BPS to empty slot"
     assert view.assign_button.toolTip() == "No empty slot left."
+    assert view.add_button.isEnabled()
+    assert _menu_texts(view) == [f"#{slot} H{slot}" for slot in range(1, 8)]
+
+
+def test_an_unknown_label_disables_sharing_even_when_nothing_is_occupied(window) -> None:
+    _post(window, label="GHOST", reason="unknown")
+    view = window.catch_all_view
+    _select(view, "GHOST")
+    assert not view.add_button.isEnabled()
+    assert "isn't in the model" in view.add_button.toolTip()
+    assert view.add_button.toolTip() != "No slot has a headstamp yet."
+
+
+def test_sharing_is_disabled_when_no_slot_is_occupied(window, config) -> None:
+    seed_model(config, {"BPS": 0})
+    _post(window, label="BPS")
+    view = window.catch_all_view
+    _select(view, "BPS")
+    assert view.assign_button.isEnabled()
+    assert not view.add_button.isEnabled()
+    assert view.add_button.toolTip() == "No slot has a headstamp yet."
+    assert _menu_texts(view) == []
+
+
+def test_adding_to_an_existing_slot_shares_it_and_selects_the_next_row(window, config, caplog) -> None:
+    seed_model(config, {"WMA": 4, "WMA NATO": 4, "SIG": 0, "IK": 0})
+    for _ in range(12):
+        _post(window, label="SIG")
+    _post(window, label="IK")
+    view = window.catch_all_view
+    _select(view, "SIG")
+    assert view.assign_button.isEnabled()
+    assert view.assign_button.objectName() == "action"
+    assert _menu_texts(view) == ["#4 WMA, WMA NATO"]
+    events: list[dict] = []
+    window.bus.subscribe("run/assignment_changed", events.append)
+
+    with caplog.at_level(logging.INFO, logger="sorter.ui.app"):
+        view.add_button.menu().actions()[0].trigger()
+    window.bus.drain()
+
+    assert config.slot_for_headstamp("SIG") == 4
+    assert config.slot_for_headstamp("WMA") == 4
+    assert config.slot_for_headstamp("WMA NATO") == 4
+    assert "slot assignment: 'SIG' -> slot 4 (source=catch_all, running=False)" in caplog.text
+    assert window.statusBar().currentMessage() == (
+        "SIG → Slot 4, sharing that bin. Cases already in the wheel still drop in the catch-all."
+    )
+    assert events and events[-1] == {"label": "SIG", "slot": 4, "source": "catch_all"}
+    assert _names(view) == ["IK"]
+    assert view.summary_label.text() == "13 in catch-all of 13 sorted (100%)"
+    assert view.assigned_label.text() == "Assigned this session: SIG → #4 (12 already in bin 0)"
+    assert view._selected_key == "IK"
+    assert view.assign_button.isEnabled()
+    assert view.assign_button.text() == "Assign IK to empty slot #1"
+    assert window.slot_grid.cards[4].names_label.text() == "SIG, WMA, WMA NATO"
+
+
+def test_an_ampersand_in_a_slot_name_is_escaped_on_the_menu(window, config) -> None:
+    seed_model(config, {"S&B": 4, "SIG": 0})
+    _post(window, label="SIG")
+    view = window.catch_all_view
+    _select(view, "SIG")
+    assert _menu_texts(view) == ["#4 S&&B"]
+    assert QKeySequence.mnemonic(_menu_texts(view)[0]).isEmpty()
+
+
+def test_adding_when_every_slot_is_taken_selects_the_next_unassigned_row(window, config) -> None:
+    assignments = {f"H{slot}": slot for slot in range(1, 8)}
+    assignments["BPS"] = 0
+    assignments["IK"] = 0
+    seed_model(config, assignments)
+    _post(window, label="BPS")
+    _post(window, label="IK")
+    view = window.catch_all_view
+    _select(view, "BPS")
+    assert not view.assign_button.isEnabled()
+
+    view.add_button.menu().actions()[0].trigger()
+
+    assert config.slot_for_headstamp("BPS") == 1
+    assert config.slot_for_headstamp("H1") == 1
+    assert _names(view) == ["IK"]
+    assert view._selected_key == "IK"
+    assert view.add_button.isEnabled()
+    assert not view.assign_button.isEnabled()
+
+
+def test_parent_mode_menu_lists_orphans_not_children_and_writes_the_parent(window, config) -> None:
+    mid = seed_model(config, {"WIN": 3, "FC": 5, "SIG": 0})
+    brass = HeadstampParentRepo(config.db).add(mid, "Brass")
+    win = next(h for h in HeadstampRepo(config.db).list_for_model(mid) if h.name == "WIN")
+    HeadstampRepo(config.db).set_parent(win.id, brass.id)
+    config.set_use_parent_classifications(True)
+    _post(window, label="WIN", parent="Brass", reason="unassigned")
+    _post(window, label="SIG", reason="unassigned")
+    view = window.catch_all_view
+    _select(view, "Brass")
+    # WIN's own slot column is not a bin while parent mode routes through Brass.
+    assert _menu_texts(view) == ["#5 FC"]
+
+    view.add_button.menu().actions()[0].trigger()
+
+    assert config.slot_for_headstamp("WIN") == 5
+    assert config.slot_for_headstamp("FC") == 5
+    parent = HeadstampParentRepo(config.db).get(brass.id)
+    assert parent is not None and parent.slot == 5
+    child = next(h for h in HeadstampRepo(config.db).list_for_model(mid) if h.name == "WIN")
+    assert child.slot == 3
+    assert _names(view) == ["SIG"]
+    assert view._selected_key == "SIG"
+
+
+def test_package_mode_menu_adds_the_headstamp_beside_the_existing_name(window, config) -> None:
+    seed_model(config, {"CBC": 0, "FC": 0, "SIG": 0})
+    config.set_run_package_mode(True)
+    config.set_package_slot_headstamp(1, "CBC", True)
+    _post(window, label="FC")
+    _post(window, label="SIG")
+    view = window.catch_all_view
+    _select(view, "FC")
+    assert _menu_texts(view) == ["#1 CBC"]
+
+    view.add_button.menu().actions()[0].trigger()
+
+    assert config.slots_for_headstamp_package("FC") == [1]
+    assert config.slots_for_headstamp_package("CBC") == [1]
+    assert _names(view) == ["SIG"]
+    assert view._selected_key == "SIG"
 
 
 def test_an_external_assignment_drops_the_row_and_keeps_the_bin_total(window, config) -> None:
