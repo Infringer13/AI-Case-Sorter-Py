@@ -651,6 +651,7 @@ def test_flush_records_the_case_the_dry_sort_returned_early(tmp_path, monkeypatc
         with patch("sorter.hardware.image_proc.case_present", side_effect=[True, False]):
             action = ctrl._handle_feeder_empty(result)
     assert action == "stop"
+    assert ctrl._sort_run_id is not None
     rows = SortRunRepo(db).counts(ctrl._sort_run_id)
     # The pending case (recorded by the flush) plus the straggler run_once
     # classified afterwards. Both are WIN → slot 3, so one upserted row.

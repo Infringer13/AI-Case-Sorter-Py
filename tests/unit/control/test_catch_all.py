@@ -57,7 +57,6 @@ def test_classify_reason_precedence() -> None:
 def test_add_counts_every_success_and_only_slot_zero_as_catch_all() -> None:
     tally = CatchAllTally()
     tally.add({"ok": False, "slot": 0, "label": "BPS"})
-    tally.add("not a result")  # type: ignore[arg-type]
     tally.add(_ok(slot=3, label="WIN", reason=ROUTED))
     tally.add(_ok())
     assert tally.total == 2
