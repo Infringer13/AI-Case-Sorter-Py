@@ -19,12 +19,15 @@ name goes through ``formatting.escape_mnemonic``. Only a below-floor reason
 takes the palette's warning colour ("Hue is meaning"); ``apply_palette``
 re-bakes that brush because an item foreground is outside the stylesheet.
 
-Subscribes ``run/result`` and ``run/assignment_changed`` on ``win.bus``.
+Subscribes ``run/result``, ``run/assignment_changed`` and ``mode/changed``
+on ``win.bus``. A result does not re-read the database: the label-to-slot
+map is cached until an assignment, a model change, or a reset (template and
+package-mode switches clear the counts, which resets this panel).
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
@@ -60,6 +63,72 @@ _FALLBACK_WARNING = "#f59e0b"
 _FALLBACK_MUTED = "#9a9a9a"
 
 
+class _Routing(NamedTuple):
+    """Slots and known labels for the panel, read once and reused per result."""
+
+    slots: dict[str, list[int]]
+    known: set[str]
+    empty: int | None
+
+
+def _known_and_routed(config: Any) -> tuple[set[str], dict[str, int]]:
+    """Names ``slot_for_headstamp`` would resolve, and the slot it would return.
+
+    One pass over the headstamp list (and the parents, when that mode is on).
+    Slot 0 is known but unassigned. A label the lookup would miss is absent.
+    """
+    known: set[str] = set()
+    routed: dict[str, int] = {}
+    active = config.settings.get_active_model_id()
+    if active is not None and config.use_parent_classifications:
+        parents = config.parents_with_slots()
+        by_id = {int(parent["id"]): parent for parent in parents}
+        if by_id:
+            for entry in config.headstamps_with_parents():
+                name = entry.get("name")
+                if not name:
+                    continue
+                name = str(name)
+                known.add(name)
+                parent_id = entry.get("parent_id")
+                if parent_id is not None and int(parent_id) in by_id:
+                    routed[name] = int(by_id[int(parent_id)]["slot"])
+                else:
+                    routed[name] = int(entry.get("slot") or 0)
+            for parent in parents:
+                name = str(parent["name"])
+                if name in known:
+                    continue
+                known.add(name)
+                routed[name] = int(parent["slot"])
+            return known, routed
+    for entry in config.headstamps:
+        name = entry.get("name")
+        if not name:
+            continue
+        name = str(name)
+        known.add(name)
+        routed[name] = int(entry.get("slot") or 0)
+    return known, routed
+
+
+def _load_routing(config: Any) -> _Routing:
+    """The panel's copy of "would this label still land in slot 0?"."""
+    known, routed = _known_and_routed(config)
+    if config.run_package_mode:
+        slots: dict[str, list[int]] = {}
+        for slot, names in config.package_slot_map().items():
+            slot_n = int(slot)
+            if slot_n <= 0:
+                continue
+            for name in names:
+                slots.setdefault(str(name), []).append(slot_n)
+        slots = {name: sorted(group) for name, group in slots.items()}
+    else:
+        slots = {name: [slot] for name, slot in routed.items() if slot > 0}
+    return _Routing(slots=slots, known=known, empty=config.first_empty_slot())
+
+
 def _summary(tally: CatchAllTally) -> str:
     caught = tally.catch_all_total
     total = tally.total
@@ -81,6 +150,8 @@ class CatchAllView(QWidget):
         self._open_top: list[CatchAllBucket] = []
         # Set for the refresh that follows the panel's own Assign click.
         self._prefer_next_assignable = False
+        # Rebuilt on assignment, model change, and reset — not on each result.
+        self._routing_cache: _Routing | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -122,6 +193,7 @@ class CatchAllView(QWidget):
         self._update_button()
         win.bus.subscribe("run/result", self._on_result)
         win.bus.subscribe("run/assignment_changed", self._on_assignment_changed)
+        win.bus.subscribe("mode/changed", self._on_mode_changed)
 
     # ----- bus -----------------------------------------------------------------
 
@@ -134,14 +206,27 @@ class CatchAllView(QWidget):
         self.refresh()
 
     def _on_assignment_changed(self, _payload: Any) -> None:
-        # The tally is historical. The ranking and the button ask the live config.
+        # The tally is historical. The ranking reads the slot map, which just changed.
+        self._invalidate_routing()
+        self.refresh()
+
+    def _on_mode_changed(self, _payload: Any) -> None:
+        # A different model has a different headstamp list. Reset (via the
+        # window's own handler) also drops the cache; this covers a mode
+        # event that arrives without one.
+        self._invalidate_routing()
         self.refresh()
 
     def reset(self) -> None:
-        """Zero the breakdown. The dashboard's Reset counts is the caller."""
+        """Zero the breakdown. The dashboard's Reset counts is the caller.
+
+        Template switches and package-mode toggles clear the counts, so this
+        is also what drops a slot map that belonged to the previous layout.
+        """
         self.tally.reset()
         self._selected_key = None
         self._session_order.clear()
+        self._invalidate_routing()
         self.refresh()
 
     def apply_palette(self) -> None:
@@ -196,9 +281,19 @@ class CatchAllView(QWidget):
         self.assigned_label.setText(text)
         self.assigned_label.setVisible(bool(text))
 
+    def _routing(self) -> _Routing:
+        cached = self._routing_cache
+        if cached is None:
+            cached = _load_routing(self._win.config)
+            self._routing_cache = cached
+        return cached
+
+    def _invalidate_routing(self) -> None:
+        self._routing_cache = None
+
     def _first_assignable_key(self) -> str | None:
         """The first ranked headstamp the Assign button can still act on."""
-        if self._win.config.first_empty_slot() is None:
+        if self._routing().empty is None:
             return None
         for bucket in self._open_top:
             if self._has_slot(bucket.key) or not self._known(bucket.key):
@@ -268,13 +363,7 @@ class CatchAllView(QWidget):
     # ----- assign --------------------------------------------------------------
 
     def _assigned_slots(self, key: str) -> list[int]:
-        config = self._win.config
-        if config.run_package_mode:
-            return list(config.slots_for_headstamp_package(key))
-        slot = config.slot_for_headstamp(key)
-        if slot:
-            return [int(slot)]
-        return []
+        return list(self._routing().slots.get(key, ()))
 
     def _has_slot(self, key: str) -> bool:
         return bool(self._assigned_slots(key))
@@ -282,7 +371,7 @@ class CatchAllView(QWidget):
     def _known(self, key: str) -> bool:
         if not key or key == EMPTY_KEY:
             return False
-        return self._win.config.slot_for_headstamp(key) is not None
+        return key in self._routing().known
 
     def _bucket(self, key: str) -> CatchAllBucket | None:
         for bucket in self._open_top:
@@ -319,7 +408,7 @@ class CatchAllView(QWidget):
             else:
                 button.setToolTip(f"{key} is already routed to {noun} {where}.")
             return
-        empty = self._win.config.first_empty_slot()
+        empty = self._routing().empty
         if empty is None:
             button.setEnabled(False)
             button.setText(escape_mnemonic(f"Assign {key} to empty slot"))
@@ -337,6 +426,9 @@ class CatchAllView(QWidget):
         if assign is None:
             return
         assign(key)
+        # The bus event that drops the cache has not been drained yet, and
+        # the next line has to see the slot this click just wrote.
+        self._invalidate_routing()
         # A failed assign leaves the row where it was. A successful one moves
         # the selection to the next headstamp that can still take a bin, so
         # Assign can be clicked straight down the list.
