@@ -230,7 +230,7 @@ sanctioned way for worker threads to update the UI.
   transactions / SAVEPOINTs). Schema: idempotent DDL plus ordered migration
   steps run through `sqlite_utils.Migrations` (`MIGRATIONS`), whose
   `_sqlite_migrations` tracking table is what decides run-once — `PRAGMA
-  user_version` (`SCHEMA_VERSION = 6`) is stamped informationally, never
+  user_version` (`SCHEMA_VERSION = 7`) is stamped informationally, never
   downgraded. A legacy DB has no tracking table, so every step runs on first
   open whatever the stamp claims; **every step is therefore presence-guarded
   and idempotent** (that same property repairs databases stamped current by a
@@ -239,7 +239,10 @@ sanctioned way for worker threads to update the UI.
   `ensure_initialized()` creates the DB, runs a one-shot import from legacy
   `data/config.json` (renaming it `.bak`), or seeds a default cartridge+model.
   Tables: `cartridges`, `models`, `headstamp_parents`, `headstamps`,
-  `slot_templates`, `settings`. One structural fix lives *outside* the
+  `slot_templates`, `settings`, `sort_runs`, `sort_run_counts`. `0007_sort_runs`
+  replays `SORT_RUNS_DDL` (IF NOT EXISTS, the same pattern as
+  `0004_slot_templates`): one row per Start or Manual-feed stretch, and one
+  counter per `(label, slot, reason)` inside it. One structural fix lives *outside* the
   ladder: `_widen_model_mode_check` rebuilds `models` when its mode CHECK
   predates `'openai'` — a CHECK can't be ALTERed, and the rebuild needs
   `PRAGMA foreign_keys` toggled, which is a silent no-op inside the
@@ -247,7 +250,7 @@ sanctioned way for worker threads to update the UI.
   would cascade-delete every headstamp). Guarded structurally off
   `sqlite_master`, like the DDL pass.
 - **`repository.py`** — `CartridgeRepo`, `ModelRepo`, `HeadstampRepo`,
-  `HeadstampParentRepo`, `SlotTemplateRepo`, `SettingsRepo`. All SQL is
+  `HeadstampParentRepo`, `SlotTemplateRepo`, `SortRunRepo`, `SettingsRepo`. All SQL is
   **parameterized**. `SettingsRepo` is a typed key/value store (JSON-encoded
   values) and holds `default_model_id` (the "active model").
 - **`config.py`** — `Config`: in-memory mirror of the `settings` sections (`api`,
@@ -256,7 +259,12 @@ sanctioned way for worker threads to update the UI.
   active model; AI Config mode stashes them in a settings key). Also the home of
   routing logic: `slot_for_headstamp`, package-mode slot maps, parent
   classifications, auto-select, run options (confidence floor, store-images mode),
-  and the sorting-template API (see below).
+  and the sorting-template API (see below). `assign_label_to_empty_slot` is
+  the one writer auto-select and the Catch-All panel share. In parent mode it
+  sets the **parent's** slot — routing reads that, so writing the child's
+  slot left every later case on the catch-all and re-fired
+  `run/assignment_changed` per case. It returns a slot only when the write
+  landed (`set_headstamp_slot` False used to be reported as success).
 - **`models.py`** — dataclasses: `Model`, `Headstamp`, `Cartridge`, `SlotTemplate`,
   `TrainingConfig`, `AIModelConfig`, `ImageProcessingConfig`, plus normalizers
   (`normalize_upload_mode`, `SLOT_TEMPLATE_MODES`) and the mode/ownership
@@ -479,12 +487,34 @@ between them from the Sort page's template dropdown.
   OpenCV can only fail to open, loudly), and a device that overruns
   `PROBE_TIMEOUT_S` is dropped **with a note on stderr** — silence there once
   cost a hardware investigation to explain a camera missing from the list.
+  On macOS that budget is 20 s rather than 6 s: AVFoundation renegotiates the
+  format on every resolution `set()`, and the stock sorter camera behind a
+  USB 2.0 hub takes well over 6 s to walk `COMMON_RESOLUTIONS` (measured
+  ~12 s for that camera, ~18 s for two), so Detect was dropping it.
+  `camera_names()` on macOS asks `system_profiler SPCameraDataType -json`
+  and uses the result only when it lists a single camera — AVFoundation's
+  index order is not that list, so two or more names would be a guess.
 
 ### The sort loop (`sorter/control/run_controller.py`)
 - **`run_controller.py`** — `RunController`: the production loop on a daemon
   thread. Per case: capture → `image_proc.crop_headstamp` → optional primer mask
   → `classifier.classify_active` → `_resolve_destination(label, confidence)` →
-  `broker.sort_and_move(slot)`. Handles the 5-position wheel pipeline
+  `broker.sort_and_move(slot)`. `_resolve_destination` returns a `Destination`
+  `(slot, above_floor, halt, reason)`. The reason comes from
+  `control/catch_all.py` (Qt-free): `routed`, `below_floor`, `unassigned`
+  (known headstamp, slot 0 — `slot_for_headstamp` returns 0), `unknown`
+  (empty label, or not in the model — `slot_for_headstamp` returns None),
+  `special` (unassigned label in `CATCH_ALL_LABELS`, case-insensitive;
+  `"upside down"` is a normal trained class), `batch_full` (package-mode
+  halt). The reason rides `run/result`, `run/classified` and `run/history`.
+  One DEBUG line per case, after routing, in `run_once` and `cycle_once`:
+  `case: label=%r parent=%r confidence=%.1f slot=%d reason=%s above_floor=%s`.
+  `SortRunRepo` records the same facts: `start()` opens a row, `_loop`'s
+  finally closes it, Manual feed opens one lazily, and each successful case
+  upserts a count. The end-of-brass flush records the case that
+  `run_once` returned before `ok` (the dry sort), which the live counters
+  used to drop. A storage failure is `log.exception` and never stops a run.
+  It handles the 5-position wheel pipeline
   (`_last_classified_slot`), the **confidence floor** (below → catch-all slot 0),
   a `NoLocalCheckpointError` from `classify_active` (stops the run with the
   reason; the Sort page also pre-flights this at Start so no case is fed),
@@ -807,15 +837,22 @@ modal), and never gate on `is_available()`.
 ### Surfaces
 | Activity | File | Purpose |
 |-----|------|---------|
-| **Sort** | `app.py` (+ `slot_grid.py`, `dialog_slot_assign.py`, `dialog_headstamp_assign.py`, `name_filter.py`) | Production sorting: the crop the classifier saw, the slot cards with live counts, sorting templates, Start/Stop/Manual feed, package-mode counters. Assignment is two dialogs over the same Config calls: bin-first (click a card) and headstamp-first ("Assign by headstamp…", every row's slot set from the keyboard); both filter through `name_filter`. |
+| **Sort** | `app.py` (+ `slot_grid.py`, `dialog_slot_assign.py`, `dialog_headstamp_assign.py`, `name_filter.py`, `catch_all_view.py`) | Production sorting: the crop the classifier saw, the slot cards with live counts, sorting templates, Start/Stop/Manual feed, package-mode counters. Assignment is two dialogs over the same Config calls: bin-first (click a card) and headstamp-first ("Assign by headstamp…", every row's slot set from the keyboard); both filter through `name_filter`. The slot 0 card opens the Catch-All panel instead of an editor. |
 | **Models** | `models_page.py` | Model library: browse/filter/sort, create, edit, **activate**, import/export, delete. Synthetic "Use AI Config" row. |
 | **Train** | `train_page.py` | Feed→capture→classify→label→save loop; "Sort While Training"; launches training. |
 | **AI Config** | `ai_page.py` | HTTP server config (endpoint/key/model/prompt/encoding), headstamp manager, single-shot test. |
 | **Community** | `community_page.py` | Browse/search/download community models; share entry point. Auth-gated. |
 | **Settings** | `settings_{camera,serial,imageproc}.py` + `app.py`'s Theme section + `dialog_winforms_import.py` | Camera, Serial, Image Processing, Theme, Import from Windows — listed in `SETTINGS_SECTIONS`, reached by name. |
 
-Docks: `serial_monitor.py`, `history_view.py`, `help_viewer.py`,
-`messages_view.py`, and the Themes panel in `app.py`. Dialogs are `dialog_*.py`.
+Docks: `serial_monitor.py`, `history_view.py`, `catch_all_view.py`,
+`help_viewer.py`, `messages_view.py`, and the Themes panel in `app.py`.
+The Catch-All dock follows the history dock: right-hand, closed at startup,
+`scroll_area=False`, in `DOCK_HOMES`, View → "Catch-All breakdown". It
+tallies successful `run/result` events (the same gate as the slot 0 card)
+and `run/assignment_changed`, resets from `_clear_counts`, and keeps its
+counts across Stop/Start. The assign button is a selection-bar `#action`
+control — items only in the table, selection kept by headstamp key.
+Dialogs are `dialog_*.py`.
 
 ### Conventions, each one load-bearing
 

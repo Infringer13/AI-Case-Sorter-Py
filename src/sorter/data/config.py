@@ -844,26 +844,72 @@ class Config:
                 return slot
         return None
 
-    def assign_headstamp_to_empty_slot(self, name: str) -> int | None:
-        """Route an unassigned headstamp to the first empty slot. Returns the
-        slot it landed in, or None when there is no free slot.
+    def _parent_assignment_target(self, label: str) -> Any | None:
+        """The parent whose slot routing uses for ``label``, if it has one.
 
-        Respects existing assignments and only ever places one headstamp into
-        an empty slot.
+        A child rolls up to its parent. A label that is already a parent name
+        (a parent-trained model, or the Catch-All panel's key) is that parent.
+        An orphan headstamp and an unknown label return None so the caller
+        falls through to the per-headstamp slot.
         """
-        if not name:
+        mid = self.settings.get_active_model_id()
+        if mid is None:
             return None
-        package = self.run_package_mode
-        if package:
-            if self.slots_for_headstamp_package(name):
-                return None  # already assigned somewhere
-        elif self.slot_for_headstamp(name):
+        headstamp = next((h for h in self.headstamps_repo.list_for_model(mid) if h.name == label), None)
+        if headstamp is not None and headstamp.parent_id is not None:
+            return self.parents_repo.get(headstamp.parent_id)
+        return self.parents_repo.find_by_name(mid, label)
+
+    def assign_label_to_empty_slot(self, label: str) -> int | None:
+        """Place ``label`` in the first empty slot. Returns that slot, or None.
+
+        None means there is no free slot, the label is already routed, or —
+        in standard and AI Config mode — the label is not a headstamp this
+        context knows (``set_headstamp_slot`` returned False). In parent mode
+        the slot written is the *parent's*, because that is the slot
+        ``slot_for_headstamp`` reads; writing the child's slot leaves every
+        later case on the catch-all. Package mode adds the label to the first
+        empty package slot. The whole change is one transaction; the setters
+        keep the active sorting template in step.
+        """
+        label = (label or "").strip()
+        if not label:
             return None
-        slot = self.first_empty_slot(package=package)
-        if slot is None:
-            return None
-        if package:
-            self.set_package_slot_headstamp(slot, name, True)
-        else:
-            self.set_headstamp_slot(name, slot)
-        return slot
+        with self.db.transaction():
+            if self.run_package_mode:
+                if self.slots_for_headstamp_package(label):
+                    return None
+                slot = self.first_empty_slot(package=True)
+                if slot is None:
+                    return None
+                self.set_package_slot_headstamp(slot, label, True)
+                return slot
+            if self.use_parent_classifications:
+                parent = self._parent_assignment_target(label)
+                if parent is not None:
+                    if int(parent.slot) > 0:
+                        return None
+                    slot = self.first_empty_slot(package=False)
+                    if slot is None:
+                        return None
+                    if not self.set_parent_slot(parent.id, slot):
+                        return None
+                    return slot
+            if self.slot_for_headstamp(label):
+                return None
+            slot = self.first_empty_slot(package=False)
+            if slot is None:
+                return None
+            if not self.set_headstamp_slot(label, slot):
+                return None
+            return slot
+
+    def assign_headstamp_to_empty_slot(self, name: str) -> int | None:
+        """Route an unassigned headstamp to the first empty slot.
+
+        Returns the slot it landed in, or None when there is no free slot,
+        it is already routed, or it does not exist. Delegates to
+        :meth:`assign_label_to_empty_slot`, which is what auto-select and the
+        Catch-All panel both call.
+        """
+        return self.assign_label_to_empty_slot(name)
