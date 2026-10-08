@@ -520,6 +520,106 @@ def test_results_reuse_the_slot_map_until_an_assignment(window, config) -> None:
     assert "IK" in _names(view)
 
 
+def test_an_open_slot_menu_survives_results_and_a_refresh(window, config) -> None:
+    seed_model(config, {"WMA": 4, "WMA NATO": 4, "SIG": 0})
+    _post(window, label="SIG")
+    view = window.catch_all_view
+    _select(view, "SIG")
+    menu = view.add_button.menu()
+    assert menu is not None
+    menu.show()
+    assert menu.isVisible()
+    actions = menu.actions()
+    assert [action.text() for action in actions] == ["#4 WMA, WMA NATO"]
+    summary = view.summary_label.text()
+    items = [view.table.item(0, column) for column in range(view.table.columnCount())]
+
+    _post(window, label="SIG")
+    _post(window, label="SIG")
+
+    assert menu.isVisible()
+    assert menu.actions() == actions
+    assert view.summary_label.text() == summary
+    assert view._refresh_pending
+    assert [view.table.item(0, column) for column in range(view.table.columnCount())] == items
+
+    # An immediate repaint (theme, reset) may rewrite cells. It must not
+    # tear the popup down or replace the actions the user is pointing at.
+    view.refresh()
+    assert menu.isVisible()
+    assert menu.actions() == actions
+
+    menu.close()
+    assert not menu.isVisible()
+    assert view.summary_label.text() == "3 in catch-all of 3 sorted (100%)"
+    assert view.table.item(0, 2).text() == "3"
+
+
+def test_a_repeat_refresh_does_not_touch_unchanged_widgets(window, config) -> None:
+    seed_model(config, {"WMA": 4, "SIG": 0, "IK": 0})
+    _post(window, label="SIG")
+    _post(window, label="IK")
+    view = window.catch_all_view
+    _select(view, "SIG")
+    menu = view.add_button.menu()
+    assert menu is not None
+    actions = menu.actions()
+    items = [
+        view.table.item(row, column)
+        for row in range(view.table.rowCount())
+        for column in range(view.table.columnCount())
+    ]
+    scroll = view.table.verticalScrollBar().value()
+    writes = view._widget_writes
+
+    view.refresh()
+
+    assert view._widget_writes == writes
+    assert menu.actions() == actions
+    assert menu.isVisible() is False
+    assert [
+        view.table.item(row, column)
+        for row in range(view.table.rowCount())
+        for column in range(view.table.columnCount())
+    ] == items
+    assert view.table.verticalScrollBar().value() == scroll
+    assert view.summary_label.text() == "2 in catch-all of 2 sorted (100%)"
+
+
+def test_results_on_an_open_panel_coalesce_into_one_paint(qapp, window) -> None:
+    _post(window, label="BPS")
+    view = window.catch_all_view
+    window.resize(1200, 800)
+    window.show()
+    window.reveal_dock(window.catch_all_dock)
+    qapp.processEvents()
+    assert view._panel_open()
+
+    window.bus.post("run/result", {"ok": True, "slot": 0, "label": "BPS", "parent": None, "reason": "unassigned"})
+    window.bus.post("run/result", {"ok": True, "slot": 0, "label": "BPS", "parent": None, "reason": "unassigned"})
+    window.bus.drain()
+
+    assert view.summary_label.text() == "1 in catch-all of 1 sorted (100%)"
+    assert view._refresh_timer.isActive()
+    view._refresh_timer.timeout.emit()
+    view._refresh_timer.stop()
+    assert view.summary_label.text() == "3 in catch-all of 3 sorted (100%)"
+    assert view.table.item(0, 2).text() == "3"
+
+
+def test_a_new_case_keeps_the_table_scroll_position(window, config) -> None:
+    seed_model(config, {"BPS": 0})
+    _post(window, label="BPS")
+    view = window.catch_all_view
+    bar = view.table.verticalScrollBar()
+    bar.setRange(0, 40)
+    bar.setValue(17)
+
+    _post(window, label="BPS")
+
+    assert bar.value() == 17
+
+
 def test_reset_clears_the_assigned_line(window, config) -> None:
     seed_model(config, {"BPS": 0})
     _post(window, label="BPS")

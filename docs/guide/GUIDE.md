@@ -242,7 +242,9 @@ headstamp shows up rarely and does not need a bin of its own. It is
 unavailable, and says why, when nothing is selected, when the label is
 unknown, when it already has a slot, or when no slot has a headstamp yet.
 Assign to empty slot stays the main button. Either choice selects the next
-headstamp that can still be assigned.
+headstamp that can still be assigned. The menu stays open while cases keep
+arriving, so a bin can be picked during a run; the table catches up when
+the menu closes.
 
 You can assign during a run. The case already in the wheel still drops in
 the Catch-All; put an empty bin in the slot you just filled, and the next

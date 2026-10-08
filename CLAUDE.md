@@ -877,7 +877,13 @@ occupied slots (`#4 WMA, WMA NATO`, the same occupancy as the slot cards)
 and calls `assign_label_to_slot`. It is disabled, with a tooltip, when the
 label is unknown or no slot is occupied. A successful assign from either
 control selects the next key that can still be assigned, including when
-every slot is taken and only sharing remains. Dialogs are `dialog_*.py`.
+every slot is taken and only sharing remains. While the dock is open, result
+paints wait `_RESULT_REFRESH_MS` and then update cells in place (scroll and
+selection stay put; text and tooltips are written only when they differ).
+The share menu is rebuilt only when its entries change, and never while it
+is open — a case that arrives during a pick is painted when the menu closes.
+`clear()` on a visible `QMenu` was closing the popup on every case. Dialogs
+are `dialog_*.py`.
 
 ### Conventions, each one load-bearing
 
