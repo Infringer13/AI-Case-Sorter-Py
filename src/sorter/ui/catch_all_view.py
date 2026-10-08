@@ -26,13 +26,19 @@ Subscribes ``run/result``, ``run/assignment_changed`` and ``mode/changed``
 on ``win.bus``. A result does not re-read the database: the label-to-slot
 map is cached until an assignment, a model change, or a reset (template and
 package-mode switches clear the counts, which resets this panel).
+
+A result while the dock is open waits briefly and then repaints once, in
+place: cells, the header and the buttons change only when their text does,
+and the scroll position stays put. The share menu is rebuilt only when its
+entries change, and never while it is open — a case arriving mid-pick used
+to ``clear()`` the menu and the popup flickered shut.
 """
 
 from __future__ import annotations
 
 from typing import Any, NamedTuple
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -190,6 +196,20 @@ _SELECT_TIP = "Select a headstamp."
 _UNKNOWN_TIP = "This label isn't in the model, so it can't be assigned to a slot."
 _NO_OCCUPIED_TIP = "No slot has a headstamp yet."
 _ADD_TIP = "Share a bin that already has brass. Cases already in the wheel still drop in the catch-all."
+# One paint for a burst of cases, long enough that a running sort does not
+# redraw the open slot menu, short enough that the header still feels live.
+_RESULT_REFRESH_MS = 200
+
+
+class _RowPaint(NamedTuple):
+    """What one table row should show. Compared against the live items."""
+
+    texts: tuple[str, str, str, str, str]
+    key: str | None
+    tip: str
+    selectable: bool
+    reason_color: str | None
+    muted_color: str | None
 
 
 class CatchAllView(QWidget):
@@ -209,6 +229,20 @@ class CatchAllView(QWidget):
         self._prefer_next_assignable = False
         # Rebuilt on assignment, model change, and reset — not on each result.
         self._routing_cache: _Routing | None = None
+        # A result arrived while the slot menu was open, or a coalesced paint
+        # has not run yet. The menu close and the timer both consume it.
+        self._refresh_pending = False
+        # Lets the assign click repaint the table while its menu is still up
+        # without treating that menu as something a result may rebuild.
+        self._suppress_menu_guard = False
+        self._selectable_flags: Qt.ItemFlag | None = None
+        # How many widget writes the paints so far have actually performed.
+        # A repeat paint of unchanged data leaves this still, which is the
+        # flicker fix: setters are what close the menu and reset the scroll.
+        self._widget_writes = 0
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.timeout.connect(self._refresh_now)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -243,7 +277,10 @@ class CatchAllView(QWidget):
         bar.addStretch(1)
         self.add_button = QPushButton(_ADD_TEXT, self)
         self.add_button.setObjectName("catchAllAdd")
-        self.add_button.setMenu(QMenu(self.add_button))
+        add_menu = QMenu(self.add_button)
+        add_menu.aboutToShow.connect(self._sync_add_menu)
+        add_menu.aboutToHide.connect(self._on_add_menu_about_to_hide)
+        self.add_button.setMenu(add_menu)
         bar.addWidget(self.add_button)
         self.assign_button = QPushButton("Assign to empty slot", self)
         self.assign_button.setObjectName("action")
@@ -264,7 +301,7 @@ class CatchAllView(QWidget):
         if not isinstance(result, dict) or not result.get("ok"):
             return
         self.tally.add(result)
-        self.refresh()
+        self._schedule_refresh()
 
     def _on_assignment_changed(self, _payload: Any) -> None:
         # The tally is historical. The ranking reads the slot map, which just changed.
@@ -296,24 +333,70 @@ class CatchAllView(QWidget):
 
     # ----- table ---------------------------------------------------------------
 
+    def _panel_open(self) -> bool:
+        """True when this dock is on screen, which is when a sort can flicker it."""
+        dock = getattr(self._win, "catch_all_dock", None)
+        if dock is not None and dock.isClosed():
+            return False
+        return self.isVisible()
+
+    def _menu_really_open(self) -> bool:
+        menu = self.add_button.menu()
+        return menu is not None and menu.isVisible()
+
+    def _schedule_refresh(self) -> None:
+        """Coalesce result paints while the dock is open.
+
+        A hidden dock paints immediately, so a closed panel stays current and
+        a test that never shows the window still sees the row after the bus
+        drains. An open slot menu is not painted under at all.
+        """
+        if self._menu_really_open():
+            self._refresh_pending = True
+            return
+        if not self._panel_open():
+            self._refresh_now()
+            return
+        self._refresh_pending = True
+        if not self._refresh_timer.isActive():
+            self._refresh_timer.start(_RESULT_REFRESH_MS)
+
+    def _on_add_menu_about_to_hide(self) -> None:
+        """The pick is over. Apply any case that arrived while the menu was up."""
+        if not self._refresh_pending:
+            self._sync_add_menu()
+            return
+        # ``isVisible()`` is still true in ``aboutToHide``. Paint anyway; the
+        # menu sync itself refuses to ``clear()`` a menu that is showing.
+        self._suppress_menu_guard = True
+        try:
+            self._refresh_now()
+        finally:
+            self._suppress_menu_guard = False
+
     def refresh(self) -> None:
-        self.summary_label.setText(_summary(self.tally))
+        """Repaint immediately. Assignment, reset, and theme changes use this."""
+        self._suppress_menu_guard = True
+        try:
+            self._refresh_now()
+        finally:
+            self._suppress_menu_guard = False
+
+    def _refresh_now(self) -> None:
+        self._refresh_timer.stop()
+        if self._menu_really_open() and not self._suppress_menu_guard:
+            self._refresh_pending = True
+            return
+        self._refresh_pending = False
+        self._paint()
+
+    def _paint(self) -> None:
+        self._set_text(self.summary_label, _summary(self.tally))
         self._sync_session_order()
         self._paint_session_line()
         self._open_top, other = self.tally.open_ranking(self._has_slot)
         selected = self._first_assignable_key() if self._prefer_next_assignable else self._selected_key
-        self.table.blockSignals(True)
-        self.table.setRowCount(0)
-        caught = self.tally.catch_all_total
-        warning = self._color("warning", _FALLBACK_WARNING)
-        muted = self._color("text_muted", _FALLBACK_MUTED)
-        for rank, bucket in enumerate(self._open_top, start=1):
-            self._add_bucket_row(rank, bucket, caught, warning)
-        other_keys, other_cases = other
-        if other_keys:
-            self._add_other_row(other_keys, other_cases, caught, muted)
-        self._restore_selection(selected)
-        self.table.blockSignals(False)
+        self._paint_table(selected, other)
         self._update_button()
 
     def _sync_session_order(self) -> None:
@@ -339,8 +422,34 @@ class CatchAllView(QWidget):
                 continue
             entries.append((key, slots, fixed_by_assignment(bucket)))
         text = assigned_session_line(entries)
-        self.assigned_label.setText(text)
-        self.assigned_label.setVisible(bool(text))
+        self._set_text(self.assigned_label, text)
+        self._set_shown(self.assigned_label, bool(text))
+
+    def _wrote(self) -> None:
+        self._widget_writes += 1
+
+    def _set_text(self, widget: QLabel | QPushButton, text: str) -> None:
+        if widget.text() != text:
+            self._wrote()
+            widget.setText(text)
+
+    def _set_shown(self, widget: QWidget, shown: bool) -> None:
+        # ``isHidden`` is the explicit flag. ``isVisible`` is false whenever
+        # the dock or the window is hidden, which would make every refresh
+        # call ``setVisible`` again.
+        if widget.isHidden() == shown:
+            self._wrote()
+            widget.setVisible(shown)
+
+    def _set_enabled(self, widget: QWidget, enabled: bool) -> None:
+        if widget.isEnabled() != enabled:
+            self._wrote()
+            widget.setEnabled(enabled)
+
+    def _set_tip(self, widget: QWidget, tip: str) -> None:
+        if widget.toolTip() != tip:
+            self._wrote()
+            widget.setToolTip(tip)
 
     def _routing(self) -> _Routing:
         cached = self._routing_cache
@@ -367,51 +476,143 @@ class CatchAllView(QWidget):
             return bucket.key
         return None
 
-    def _add_bucket_row(self, rank: int, bucket: CatchAllBucket, caught: int, warning: QColor) -> None:
-        row = self.table.rowCount()
-        self.table.insertRow(row)
-        values = (
-            str(rank),
-            bucket.key,
-            str(bucket.count),
-            f"{percent(bucket.count, caught)}%",
-            reason_summary(bucket),
-        )
-        below_only = set(bucket.reasons) == {BELOW_FLOOR}
-        tip = reason_tooltip(bucket)
-        for column, text in enumerate(values):
-            item = QTableWidgetItem(text)
-            item.setData(Qt.ItemDataRole.UserRole, bucket.key)
-            item.setToolTip(tip)
-            if column == COL_REASON and below_only:
-                item.setForeground(QBrush(warning))
-            self.table.setItem(row, column, item)
+    def _paint_table(self, selected: str | None, other: tuple[int, int]) -> None:
+        caught = self.tally.catch_all_total
+        warning = self._color("warning", _FALLBACK_WARNING).name()
+        muted = self._color("text_muted", _FALLBACK_MUTED).name()
+        specs: list[_RowPaint] = []
+        for rank, bucket in enumerate(self._open_top, start=1):
+            below_only = set(bucket.reasons) == {BELOW_FLOOR}
+            specs.append(
+                _RowPaint(
+                    texts=(
+                        str(rank),
+                        bucket.key,
+                        str(bucket.count),
+                        f"{percent(bucket.count, caught)}%",
+                        reason_summary(bucket),
+                    ),
+                    key=bucket.key,
+                    tip=reason_tooltip(bucket),
+                    selectable=True,
+                    reason_color=warning if below_only else None,
+                    muted_color=None,
+                )
+            )
+        other_keys, other_cases = other
+        if other_keys:
+            phrase = f"Other: {other_keys} headstamps, {other_cases} cases"
+            specs.append(
+                _RowPaint(
+                    texts=("", phrase, str(other_cases), f"{percent(other_cases, caught)}%", ""),
+                    key=None,
+                    tip=phrase,
+                    selectable=False,
+                    reason_color=None,
+                    muted_color=muted,
+                )
+            )
 
-    def _add_other_row(self, n_keys: int, n_cases: int, caught: int, muted: QColor) -> None:
-        row = self.table.rowCount()
-        self.table.insertRow(row)
-        phrase = f"Other: {n_keys} headstamps, {n_cases} cases"
-        values = ("", phrase, str(n_cases), f"{percent(n_cases, caught)}%", "")
-        brush = QBrush(muted)
-        for column, text in enumerate(values):
-            item = QTableWidgetItem(text)
-            item.setFlags(Qt.ItemFlag.NoItemFlags)
-            item.setForeground(brush)
-            item.setToolTip(phrase)
-            self.table.setItem(row, column, item)
+        vbar = self.table.verticalScrollBar()
+        hbar = self.table.horizontalScrollBar()
+        v_value, h_value = vbar.value(), hbar.value()
+        same_key = selected == self._selected_key
+        row_before = self.table.currentRow()
 
-    def _restore_selection(self, key: str | None) -> None:
-        self._selected_key = None
-        if not key:
-            self.table.clearSelection()
+        self.table.blockSignals(True)
+        if self.table.rowCount() != len(specs):
+            self._wrote()
+            self.table.setRowCount(len(specs))
+        for row, spec in enumerate(specs):
+            self._apply_row(row, spec)
+        self._move_selection(selected)
+        self.table.blockSignals(False)
+
+        # A new case must not yank the list. Moving the highlight onto a
+        # different headstamp (the click that assigns one) may.
+        if same_key and self.table.currentRow() == row_before:
+            if vbar.value() != v_value:
+                self._wrote()
+                vbar.setValue(v_value)
+            if hbar.value() != h_value:
+                self._wrote()
+                hbar.setValue(h_value)
+
+    def _selectable_item_flags(self) -> Qt.ItemFlag:
+        flags = self._selectable_flags
+        if flags is None:
+            flags = QTableWidgetItem().flags()
+            self._selectable_flags = flags
+        return flags
+
+    def _apply_row(self, row: int, spec: _RowPaint) -> None:
+        flags = self._selectable_item_flags() if spec.selectable else Qt.ItemFlag.NoItemFlags
+        for column, text in enumerate(spec.texts):
+            item = self.table.item(row, column)
+            if item is None:
+                item = QTableWidgetItem()
+                self._wrote()
+                self.table.setItem(row, column, item)
+            if item.text() != text:
+                self._wrote()
+                item.setText(text)
+            if item.toolTip() != spec.tip:
+                self._wrote()
+                item.setToolTip(spec.tip)
+            if item.data(Qt.ItemDataRole.UserRole) != spec.key:
+                self._wrote()
+                item.setData(Qt.ItemDataRole.UserRole, spec.key)
+            if item.flags() != flags:
+                self._wrote()
+                item.setFlags(flags)
+            self._apply_foreground(item, column, spec)
+
+    def _apply_foreground(self, item: QTableWidgetItem, column: int, spec: _RowPaint) -> None:
+        if spec.muted_color is not None:
+            wanted = spec.muted_color
+        elif column == COL_REASON and spec.reason_color is not None:
+            wanted = spec.reason_color
+        else:
+            wanted = None
+        current = item.foreground()
+        if wanted is None:
+            if current.style() != Qt.BrushStyle.NoBrush:
+                self._wrote()
+                item.setForeground(QBrush())
             return
+        if current.style() != Qt.BrushStyle.NoBrush and current.color().name() == wanted:
+            return
+        self._wrote()
+        item.setForeground(QBrush(QColor(wanted)))
+
+    def _row_for_key(self, key: str) -> int | None:
         for row in range(self.table.rowCount()):
             item = self.table.item(row, COL_NAME)
             if item is not None and item.data(Qt.ItemDataRole.UserRole) == key:
-                self.table.setCurrentCell(row, COL_NAME)
-                self._selected_key = key
-                return
-        self.table.clearSelection()
+                return row
+        return None
+
+    def _move_selection(self, key: str | None) -> None:
+        """Highlight ``key`` without ``setCurrentCell`` when it is already current."""
+        if not key:
+            self._selected_key = None
+            if self.table.currentRow() >= 0:
+                self._wrote()
+                self.table.clearSelection()
+                self.table.setCurrentCell(-1, -1)
+            return
+        row = self._row_for_key(key)
+        if row is None:
+            self._selected_key = None
+            if self.table.currentRow() >= 0:
+                self._wrote()
+                self.table.clearSelection()
+                self.table.setCurrentCell(-1, -1)
+            return
+        self._selected_key = key
+        if self.table.currentRow() != row:
+            self._wrote()
+            self.table.setCurrentCell(row, COL_NAME)
 
     def _on_selection_changed(self) -> None:
         item = self.table.item(self.table.currentRow(), COL_NAME)
@@ -455,65 +656,79 @@ class CatchAllView(QWidget):
             )
         return f"{key} is already routed to {noun} {where}."
 
-    def _set_add(self, enabled: bool, tip: str) -> None:
-        self.add_button.setEnabled(enabled)
-        self.add_button.setToolTip(tip)
-        if not enabled:
-            menu = self.add_button.menu()
-            if menu is not None:
-                menu.clear()
+    def _apply_assign_button(self, enabled: bool, text: str, tip: str) -> None:
+        self._set_enabled(self.assign_button, enabled)
+        self._set_text(self.assign_button, text)
+        self._set_tip(self.assign_button, tip)
 
-    def _fill_add_menu(self, occupied: tuple[tuple[int, tuple[str, ...]], ...]) -> None:
+    def _apply_add_button(self, enabled: bool, tip: str) -> None:
+        self._set_enabled(self.add_button, enabled)
+        self._set_tip(self.add_button, tip)
+        self._sync_add_menu()
+
+    def _desired_menu(self) -> tuple[tuple[int, str], ...]:
+        if not self.add_button.isEnabled():
+            return ()
+        return tuple((slot, escape_mnemonic(f"#{slot} {', '.join(names)}")) for slot, names in self._routing().occupied)
+
+    def _sync_add_menu(self) -> None:
+        """Fill the menu when its entries changed. Never while the popup is up.
+
+        ``clear()`` on a visible menu destroys the actions the user is looking
+        at and the popup closes. ``aboutToShow`` calls this before the popup
+        exists, so an open is still a fresh list when the bins have changed.
+        """
         menu = self.add_button.menu()
-        if menu is None:
+        if menu is None or menu.isVisible():
             return
+        desired = self._desired_menu()
+        current: list[tuple[int, str]] = []
+        for action in menu.actions():
+            slot = action.data()
+            if not isinstance(slot, int):
+                current = []
+                break
+            current.append((slot, action.text()))
+        if tuple(current) == desired:
+            return
+        self._wrote()
         menu.clear()
-        for slot, names in occupied:
-            action = menu.addAction(escape_mnemonic(f"#{slot} {', '.join(names)}"))
+        for slot, text in desired:
+            action = menu.addAction(text)
+            action.setData(slot)
             action.triggered.connect(lambda _checked=False, chosen=slot: self._add_selected_to_slot(chosen))
 
     def _update_button(self) -> None:
-        button = self.assign_button
+        button_text = "Assign to empty slot"
         key = self._selected_key
         bucket = self._bucket(key) if key else None
         if key is None or bucket is None:
-            button.setEnabled(False)
-            button.setText("Assign to empty slot")
-            button.setToolTip(_SELECT_TIP)
-            self._set_add(False, _SELECT_TIP)
+            self._apply_assign_button(False, button_text, _SELECT_TIP)
+            self._apply_add_button(False, _SELECT_TIP)
             return
         if not self._known(key):
-            button.setEnabled(False)
-            button.setText(escape_mnemonic(f"Assign {key} to empty slot"))
-            button.setToolTip(_UNKNOWN_TIP)
-            self._set_add(False, _UNKNOWN_TIP)
+            self._apply_assign_button(False, escape_mnemonic(f"Assign {key} to empty slot"), _UNKNOWN_TIP)
+            self._apply_add_button(False, _UNKNOWN_TIP)
             return
         assigned = self._assigned_slots(key)
         if assigned:
-            button.setEnabled(False)
-            button.setText(f"→ #{assigned[0]}")
             tip = self._routed_tip(key, bucket, assigned)
-            button.setToolTip(tip)
-            self._set_add(False, tip)
+            self._apply_assign_button(False, f"→ #{assigned[0]}", tip)
+            self._apply_add_button(False, tip)
             return
         empty = self._routing().empty
         if empty is None:
-            button.setEnabled(False)
-            button.setText(escape_mnemonic(f"Assign {key} to empty slot"))
-            button.setToolTip("No empty slot left.")
+            self._apply_assign_button(False, escape_mnemonic(f"Assign {key} to empty slot"), "No empty slot left.")
         else:
-            button.setEnabled(True)
-            button.setText(escape_mnemonic(f"Assign {key} to empty slot #{empty}"))
-            button.setToolTip(
-                f"Put an empty bin in slot {empty}. Cases already in the wheel still drop in the catch-all."
+            self._apply_assign_button(
+                True,
+                escape_mnemonic(f"Assign {key} to empty slot #{empty}"),
+                f"Put an empty bin in slot {empty}. Cases already in the wheel still drop in the catch-all.",
             )
-        occupied = self._routing().occupied
-        if not occupied:
-            self._set_add(False, _NO_OCCUPIED_TIP)
+        if not self._routing().occupied:
+            self._apply_add_button(False, _NO_OCCUPIED_TIP)
             return
-        self._fill_add_menu(occupied)
-        self.add_button.setEnabled(True)
-        self.add_button.setToolTip(_ADD_TIP)
+        self._apply_add_button(True, _ADD_TIP)
 
     def _finish_assign(self, key: str) -> None:
         # The bus event that drops the cache has not been drained yet, and
@@ -521,6 +736,9 @@ class CatchAllView(QWidget):
         self._invalidate_routing()
         # A failed assign leaves the row where it was. A successful one moves
         # the selection to the next headstamp that can still take a bin.
+        # Paint even if the menu has not hidden yet: the prefer flag would be
+        # gone by the time ``aboutToHide`` ran. The menu itself is not cleared
+        # while it is showing.
         self._prefer_next_assignable = self._has_slot(key)
         self.refresh()
         self._prefer_next_assignable = False
