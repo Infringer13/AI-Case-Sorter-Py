@@ -195,9 +195,14 @@ this session, which headstamps they were, and why.
 
 The header is that count against everything sorted so far ("319 in catch-all
 of 615 sorted (52%)"). It stays the number of cases physically in the bin,
-even after you assign some of them. The table lists the ten headstamps that
-would still land there if they were seen now, with each one's remaining
-count, its share of the catch-all, and the reason:
+even after you assign some of them.
+
+**Top Ten** and **ALL**, at the upper left, choose how much of the list you
+see. Exactly one is lit, in the theme's success colour (green on the stock
+dark and light themes); the other stays an ordinary button. The panel opens
+on **Top Ten**. Each row is a headstamp that would still land in the
+catch-all if it were seen now, with its remaining count, its share of the
+catch-all, and the reason:
 
 - **Below floor** — the prediction did not reach the [confidence
   floor](#run-options). This is the only reason drawn in the warning colour.
@@ -208,10 +213,16 @@ count, its share of the catch-all, and the reason:
 - **Batch full** — [package mode](#package-mode), and every slot for that
   headstamp was already full.
 
-Anything past those ten is one greyed **Other** row ("Other: 2 headstamps,
-4 cases"). It cannot be selected. A headstamp grouped under a parent is
-listed as the parent; point at the reason and the tooltip names the child
-labels and the full count of each reason.
+**Top Ten** keeps the ten fullest of those rows. Anything past them is one
+greyed **Other** row ("Other: 2 headstamps, 4 cases"). It cannot be selected.
+**ALL** lists every such headstamp, in the same order, with no Other row.
+The table scrolls when that list is longer than the panel. Opening the panel,
+and switching between the two, leaves the panel the size you last had it.
+The lit choice lasts until you quit.
+
+A headstamp grouped under a parent is listed as the parent; point at the
+reason and the tooltip names the child labels and the full count of each
+reason.
 
 Giving a headstamp a slot — from this panel, from a slot card, or from
 **Assign by headstamp** — takes it off that list, and the next one moves up.
@@ -228,7 +239,8 @@ counts** clears the line with the rest of the tally.
 
 **Assign {name} to empty slot #N**, under the table, puts the selected
 headstamp in the first empty bin and then selects the next headstamp that
-can still be assigned, so you can work down the list. The button is
+can still be assigned, so you can work down the list. It does this for any
+row, including one that only **ALL** shows. The button is
 unavailable, and says why, when nothing is selected, when there is no empty
 slot, when the label is unknown, or when it already has a slot — the button
 then reads **→ #N**. A row that is only below the confidence floor, for a

@@ -26,6 +26,19 @@ def test_stylesheet_carries_the_palette(name: str) -> None:
         assert palette[role] in qss, f"{name}: {role} missing from the stylesheet"
 
 
+def test_the_catch_all_mode_button_is_green_only_when_checked() -> None:
+    palette = BUILTIN_THEMES["Dark"]
+    qss = build_stylesheet(palette)
+    checked = block(qss, "QPushButton#catchAllMode:checked")
+    assert palette["success"] in checked
+    assert palette["text_inverse"] in checked
+    # Unchecked stays the plain QPushButton rule. A fill on the bare name
+    # would light both toggles at once.
+    assert "QPushButton#catchAllMode {" not in qss
+    light = build_stylesheet(BUILTIN_THEMES["Light"])
+    assert BUILTIN_THEMES["Light"]["success"] in block(light, "QPushButton#catchAllMode:checked")
+
+
 @pytest.mark.parametrize("name", list(BUILTIN_THEMES))
 def test_stylesheet_is_well_formed(name: str) -> None:
     qss = build_stylesheet(BUILTIN_THEMES[name])

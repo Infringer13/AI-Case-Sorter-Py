@@ -864,10 +864,18 @@ and re-ranks on `run/assignment_changed`. The label→slot map is read once
 and reused for later results; `run/assignment_changed`, `mode/changed`, and
 `reset` (template switches and package-mode toggles clear the counts) drop
 it. The header stays the physical slot
-0 total. The table ranks only keys that would still land in slot 0: a new
-slot drops that key's `unassigned` and `unknown` cases (they come back if
-the slot is cleared), while `below_floor`, `special` and `batch_full` stay
-and a mixed row shows only the remainder. A line under the table
+0 total. **Top Ten** (the default) and **ALL** are an exclusive
+`QButtonGroup` of checkable buttons (`catchAllMode`; the checked one takes
+the palette `success` fill, the other stays a plain button). The choice is
+remembered on the view for the session. Top Ten paints `open_ranking`'s
+first 10 plus the Other row. ALL passes `n=None` and paints every key that
+ranking would keep, with no Other row. The table's vertical bar stays
+`ScrollBarAsNeeded`; switching modes does not resize the dock. The table
+ranks only keys that would still land in slot 0: a new slot drops that
+key's `unassigned` and `unknown` cases (they come back if the slot is
+cleared), while `below_floor`, `special` and `batch_full` stay and a mixed
+row shows only the remainder. `_ranked` is that visible list, and `_bucket`
+searches it, so Assign and Add work on a row past the tenth. A line under the table
 ("Assigned this session: …") names what left and how many cases are already
 in bin 0; `_clear_counts` clears it with the tally. Counts survive
 Stop/Start. The assign button is a selection-bar `#action` control — items

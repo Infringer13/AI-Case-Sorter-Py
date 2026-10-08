@@ -154,7 +154,7 @@ class CatchAllTally:
         return list(self._buckets.values())
 
     def open_ranking(
-        self, has_slot: Callable[[str], bool], n: int = 10
+        self, has_slot: Callable[[str], bool], n: int | None = 10
     ) -> tuple[list[CatchAllBucket], tuple[int, int]]:
         """Keys that would still land in slot 0, and the rest past ``n``.
 
@@ -163,6 +163,8 @@ class CatchAllTally:
         cases; below-floor, upside-down and batch-full cases stay, and a key
         with nothing left is omitted. The second value is ``(n_keys, n_cases)``
         for everything past the first ``n``, same shape as :meth:`other`.
+        ``n is None`` returns every visible key and ``(0, 0)`` — the panel's
+        ALL view, which has no Other row.
         """
         visible: list[CatchAllBucket] = []
         for bucket in self._buckets.values():
@@ -170,6 +172,8 @@ class CatchAllTally:
             if shown is not None:
                 visible.append(shown)
         visible.sort(key=lambda bucket: (-bucket.count, bucket.key.casefold()))
+        if n is None:
+            return visible, (0, 0)
         limit = max(0, n)
         rest = visible[limit:]
         return visible[:limit], (len(rest), sum(bucket.count for bucket in rest))

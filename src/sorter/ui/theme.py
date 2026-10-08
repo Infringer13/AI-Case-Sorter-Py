@@ -514,6 +514,24 @@ QPushButton#action:pressed {{
     border-color: {c["action_press"]};
 }}
 
+/* Catch-All Top Ten / ALL. Unchecked stays the plain QPushButton above.
+   Checked takes `success`, which tracks `action` (green, or the theme's go
+   colour when the theme has no green). Hover and press use the action
+   ramps, the same green one step each way. */
+QPushButton#catchAllMode:checked {{
+    background-color: {c["success"]};
+    color: {c["text_inverse"]};
+    border-color: {c["success"]};
+}}
+QPushButton#catchAllMode:checked:hover {{
+    background-color: {c["action_hover"]};
+    border-color: {c["action_hover"]};
+}}
+QPushButton#catchAllMode:checked:pressed {{
+    background-color: {c["action_press"]};
+    border-color: {c["action_press"]};
+}}
+
 QPushButton#update {{
     background-color: {c["update"]};
     color: {c["text_inverse"]};

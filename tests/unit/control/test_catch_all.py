@@ -170,6 +170,24 @@ def test_open_ranking_drops_assigned_unassigned_and_unknown_cases() -> None:
     assert restored.reasons[UNASSIGNED] == 10
 
 
+def test_open_ranking_without_a_limit_returns_every_visible_key() -> None:
+    tally = CatchAllTally()
+    for index in range(12):
+        tally.add(_ok(label=f"H{index:02d}"))
+    tally.add(_ok(label="H00", reason=BELOW_FLOOR))
+
+    visible, other = tally.open_ranking(lambda key: key == "H00", n=None)
+    assert other == (0, 0)
+    # Equal remaining counts, so the name orders them. H00 kept only the below-floor case.
+    assert [bucket.key for bucket in visible] == [f"H{index:02d}" for index in range(12)]
+    assert visible[0].count == 1
+    assert visible[0].reasons == {BELOW_FLOOR: 1}
+
+    top, rest = tally.open_ranking(lambda key: False)
+    assert [bucket.key for bucket in top] == ["H00"] + [f"H{index:02d}" for index in range(1, 10)]
+    assert rest == (2, 2)
+
+
 def test_open_ranking_promotes_the_next_headstamp_into_the_top_ten() -> None:
     tally = CatchAllTally()
     for index in range(12):
