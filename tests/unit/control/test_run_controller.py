@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import patch
 
 import numpy as np
@@ -705,3 +706,33 @@ def test_auto_select_in_parent_mode_assigns_the_parent_once(tmp_path) -> None:
     parent = cfg.parents_repo.get(brass_id)
     assert parent is not None and parent.slot == 1
     assert next(h for h in HeadstampRepo(db).list_for_model(mid) if h.name == "WIN").slot == child_slot
+
+
+def test_classifier_names_are_read_once_until_the_list_changes(tmp_path) -> None:
+    ctrl, cfg, _ = _make_controller(tmp_path)
+    with patch.object(cfg.headstamps_repo, "list_for_model", wraps=cfg.headstamps_repo.list_for_model) as listed:
+        first = ctrl._classifier_names()
+        warmed = listed.call_count
+        assert warmed >= 1
+        assert ctrl._classifier_names() == first
+        assert listed.call_count == warmed
+
+        ctrl.bus.post("run/assignment_changed", {"label": "FC", "slot": 5})
+        ctrl.bus.drain()
+        assert ctrl._classifier_names() == first
+        assert listed.call_count == warmed + 1
+
+
+def test_a_cycle_error_logs_that_the_case_was_not_recorded(tmp_path, caplog) -> None:
+    ctrl, _, _ = _make_controller(tmp_path)
+    with (
+        patch("sorter.ml.classifier.classify_active", side_effect=RuntimeError("boom")),
+        caplog.at_level(logging.ERROR, logger="sorter.control.run_controller"),
+    ):
+        result = ctrl.run_once()
+    assert result["ok"] is False
+    assert result["error"] == "boom"
+    assert "before this case was recorded" in caplog.text
+    assert "uncounted" in caplog.text
+    # The loop is what stops the run. run_once itself only reports the error.
+    assert result["slot"] is None
