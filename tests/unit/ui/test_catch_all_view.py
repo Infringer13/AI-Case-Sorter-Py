@@ -68,7 +68,7 @@ def test_a_fresh_panel_is_empty_and_closed(window) -> None:
     assert view.add_button.toolTip() == "Select a headstamp."
     assert _menu_texts(view) == []
     assert view.assigned_label.isHidden()
-    assert view.top_ten_button.text() == "Top Ten"
+    assert view.top_ten_button.text() == "Top 10"
     assert view.all_button.text() == "ALL"
     assert view.top_ten_button.objectName() == "catchAllMode"
     assert view.all_button.objectName() == "catchAllMode"

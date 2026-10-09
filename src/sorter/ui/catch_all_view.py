@@ -9,7 +9,7 @@ The table is items only — no cell widgets (CLAUDE.md §5). It ranks only
 headstamps that would still land in slot 0 if seen now: giving one a slot
 drops its unassigned and unknown cases so the next one moves up. Below
 floor, upside down and batch full stay, and a mixed row shows only that
-remainder. **Top Ten** (the default) paints the first 10 of that ranking
+remainder. **Top 10** (the default) paints the first 10 of that ranking
 plus a greyed Other row. **ALL** paints every one of them, and the table
 scrolls. The two are an exclusive pair at the upper right of the panel;
 the lit one uses a neutral fill — the accent ramp where that ramp is
@@ -199,7 +199,7 @@ def _summary(tally: CatchAllTally) -> str:
     return f"{caught} in catch-all of {total} sorted ({percent(caught, total)}%)"
 
 
-_TOP_TEXT = "Top Ten"
+_TOP_TEXT = "Top 10"
 _ALL_TEXT = "ALL"
 _MODE_TOP = 0
 _MODE_ALL = 1
@@ -239,7 +239,7 @@ class CatchAllView(QWidget):
         # Rows on screen: the first 10, or every open key when ALL is lit.
         # ``_bucket`` searches this, so a row past the tenth can be assigned.
         self._ranked: list[CatchAllBucket] = []
-        # Top Ten until the user picks ALL. Remembered for this session; the
+        # Top 10 until the user picks ALL. Remembered for this session; the
         # view lives as long as the window does, including while the dock is closed.
         self._show_all = False
         # Set for the refresh that follows the panel's own Assign click.
