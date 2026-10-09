@@ -226,8 +226,15 @@ sanctioned way for worker threads to update the UI.
 
 ### Persistence & configuration (`sorter/data/`)
 - **`db.py`** — `Database`: owns one `sqlite3.Connection` (WAL, foreign keys on,
-  `check_same_thread=False` with an `RLock` serializing multi-statement
-  transactions / SAVEPOINTs). Schema: idempotent DDL plus ordered migration
+  `check_same_thread=False`). The connection is **not** safe to use from two
+  threads at once: a `sqlite3.Row` keeps the cursor's column description, and
+  a second statement can rebind it before `row["id"]` runs
+  (`IndexError: tuple index out of range`, or `InterfaceError`). One `RLock`
+  covers both `execute()` — held across the fetch, with values copied into a
+  `LockedRow` before the lock drops — and `transaction()` / SAVEPOINTs, so a
+  single-statement read and a multi-statement write cannot interleave.
+  `conn` stays the raw connection for migrations and schema introspection,
+  which run on one thread. Schema: idempotent DDL plus ordered migration
   steps run through `sqlite_utils.Migrations` (`MIGRATIONS`), whose
   `_sqlite_migrations` tracking table is what decides run-once — `PRAGMA
   user_version` (`SCHEMA_VERSION = 6`) is stamped informationally, never
@@ -248,7 +255,8 @@ sanctioned way for worker threads to update the UI.
   `sqlite_master`, like the DDL pass.
 - **`repository.py`** — `CartridgeRepo`, `ModelRepo`, `HeadstampRepo`,
   `HeadstampParentRepo`, `SlotTemplateRepo`, `SettingsRepo`. All SQL is
-  **parameterized**. `SettingsRepo` is a typed key/value store (JSON-encoded
+  **parameterized** and goes through `Database.execute` (the locked fetch).
+  `SettingsRepo` is a typed key/value store (JSON-encoded
   values) and holds `default_model_id` (the "active model").
 - **`config.py`** — `Config`: in-memory mirror of the `settings` sections (`api`,
   `serial`, `image_proc`, `camera`) plus the canonical `DEFAULTS`. Headstamps are
@@ -1361,8 +1369,10 @@ flowchart TD
   only carries the torch versions built for it, so a torch bump must check
   every index still serves the new pin for its platform —
   `tests/integration/test_torch_wheel_index.py` verifies exactly that.
-- **DB access is shared across threads** via one connection + RLock. Wrap
-  multi-statement work in `db.transaction()` (reentrant via SAVEPOINT).
+- **DB access is shared across threads** via one connection + RLock. Every
+  repository statement goes through `Database.execute`, which holds the lock
+  until the rows are copied off the cursor. Wrap multi-statement work in
+  `db.transaction()` (reentrant via SAVEPOINT, same lock).
 - **Headstamps are read fresh, not cached** — don't reintroduce a cached
   snapshot (it previously caused silent data loss).
 - **Cloud features depend on the hosted `reloadingrecipes.com` backend** and a
