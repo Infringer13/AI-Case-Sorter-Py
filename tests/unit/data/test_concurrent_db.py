@@ -59,7 +59,11 @@ def test_concurrent_headstamp_reads_and_writes(tmp_path: Path) -> None:
                 assert len(rows) == 20
                 for entry in rows:
                     assert isinstance(entry["name"], str)
-                    assert isinstance(entry["id"], int)
+                # ``from_row`` is the ``row["id"]`` that used to raise. The
+                # dict above drops the id after that read has succeeded.
+                loaded = HeadstampRepo(db).list_for_model(model.id)
+                assert len(loaded) == 20
+                assert all(isinstance(stamp.id, int) for stamp in loaded)
                 assert config.slot_for_headstamp("H00") == 0
             except Exception as exc:
                 errors.append(exc)
