@@ -198,8 +198,8 @@ of 615 sorted (52%)"). It stays the number of cases physically in the bin,
 even after you assign some of them.
 
 **Top Ten** and **ALL**, at the upper right, choose how much of the list you
-see. Exactly one is lit, in the neutral highlight used for selections;
-the other stays an ordinary button. Both keep a visible outline. The panel
+see. Exactly one is lit, in a neutral highlight; the other stays an
+ordinary button. Both keep a visible outline. The panel
 opens on **Top Ten**. Each row is a headstamp that would still land in the
 catch-all if it were seen now, with its remaining count, its share of the
 catch-all, and the reason:
