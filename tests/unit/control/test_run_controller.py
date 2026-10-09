@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import patch
 
 import numpy as np
@@ -511,3 +512,33 @@ def test_stop_during_flush_aborts_without_blind_feeding(tmp_path, monkeypatch) -
             action = ctrl._handle_feeder_empty(result)
 
     assert action == "stop"
+
+
+def test_classifier_names_are_read_once_until_the_list_changes(tmp_path) -> None:
+    ctrl, cfg, _ = _make_controller(tmp_path)
+    with patch.object(cfg.headstamps_repo, "list_for_model", wraps=cfg.headstamps_repo.list_for_model) as listed:
+        first = ctrl._classifier_names()
+        warmed = listed.call_count
+        assert warmed >= 1
+        assert ctrl._classifier_names() == first
+        assert listed.call_count == warmed
+
+        ctrl.bus.post("run/assignment_changed", {"label": "FC", "slot": 5})
+        ctrl.bus.drain()
+        assert ctrl._classifier_names() == first
+        assert listed.call_count == warmed + 1
+
+
+def test_a_cycle_error_logs_that_the_case_was_not_recorded(tmp_path, caplog) -> None:
+    ctrl, _, _ = _make_controller(tmp_path)
+    with (
+        patch("sorter.ml.classifier.classify_active", side_effect=RuntimeError("boom")),
+        caplog.at_level(logging.ERROR, logger="sorter.control.run_controller"),
+    ):
+        result = ctrl.run_once()
+    assert result["ok"] is False
+    assert result["error"] == "boom"
+    assert "before this case was recorded" in caplog.text
+    assert "uncounted" in caplog.text
+    # The loop is what stops the run. run_once itself only reports the error.
+    assert result["slot"] is None

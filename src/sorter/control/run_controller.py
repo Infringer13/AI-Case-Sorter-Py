@@ -63,6 +63,13 @@ class RunController:
         # in the right slot. Default 0 (catch-all) on a fresh controller —
         # the first Manual feed click or continuous Run prime sends that.
         self._last_classified_slot = 0
+        # The classifier prompt's headstamp names. Slot routing still reads
+        # the DB every case so a mid-run assignment applies immediately; only
+        # the name list is cached, and dropped when the model or the
+        # assignments change (an added headstamp posts one of these).
+        self._headstamp_names: list[str] | None = None
+        bus.subscribe("run/assignment_changed", self._invalidate_headstamp_names)
+        bus.subscribe("mode/changed", self._invalidate_headstamp_names)
 
     @property
     def is_running(self) -> bool:
@@ -100,6 +107,24 @@ class RunController:
             self.broker.stop_run()
         except Exception:
             pass
+
+    def _invalidate_headstamp_names(self, _payload: Any = None) -> None:
+        self._headstamp_names = None
+
+    def _classifier_names(self) -> list[str]:
+        """Headstamp names for the classifier prompt.
+
+        Read once and reused until ``run/assignment_changed`` or
+        ``mode/changed``. The list is what the model is allowed to answer
+        with; it does not carry slots, so a slot edit that does not add or
+        remove a name is still safe to keep until the next invalidation
+        reloads it.
+        """
+        names = self._headstamp_names
+        if names is None:
+            names = [str(entry["name"]) for entry in self.config.headstamps if entry.get("name")]
+            self._headstamp_names = names
+        return names
 
     def _parent_label(self, label: str) -> str | None:
         """Resolve a prediction's parent group, but only in parent mode.
@@ -412,7 +437,7 @@ class RunController:
             self.bus.post("test/status", "Classifying…")
             label, confidence = classifier.classify_active(
                 cropped,
-                [h["name"] for h in self.config.headstamps if "name" in h],
+                self._classifier_names(),
                 self.config.api,
                 self.db,
             )
@@ -493,7 +518,7 @@ class RunController:
             self.bus.post("run/status", "Classifying…")
             label, confidence = classifier.classify_active(
                 cropped,
-                [h["name"] for h in self.config.headstamps if "name" in h],
+                self._classifier_names(),
                 self.config.api,
                 self.db,
             )
@@ -554,7 +579,15 @@ class RunController:
             return result
         except Exception as exc:
             result["error"] = str(exc) or exc.__class__.__name__
-            log.exception("run_once failed")
+            # The run still stops (_loop posts run/error and breaks). Say so
+            # here: the status line is only the exception text, and a case
+            # that died before ok=True is otherwise absent from the tally.
+            log.exception(
+                "run_once failed before this case was recorded (label=%r slot=%s); "
+                "the run will stop and the case stays uncounted",
+                result.get("label") or "",
+                result.get("slot"),
+            )
             return result
 
     # ----- continuous loop ----------------------------------------------------
@@ -613,7 +646,7 @@ class RunController:
             self.bus.post("run/status", "Classifying…")
             label, confidence = classifier.classify_active(
                 cropped,
-                [h["name"] for h in self.config.headstamps if "name" in h],
+                self._classifier_names(),
                 self.config.api,
                 self.db,
             )
@@ -634,7 +667,11 @@ class RunController:
             # Stash for the next Manual feed click or continuous Run prime.
             self._last_classified_slot = slot
         except Exception as exc:
-            log.exception("cycle_once failed")
+            log.exception(
+                "cycle_once failed before this case was recorded (label=%r slot=%s); the case stays uncounted",
+                result.get("label") or "",
+                result.get("slot"),
+            )
             result["error"] = str(exc) or exc.__class__.__name__
         self.bus.post("run/result", result)
         if result.get("error"):

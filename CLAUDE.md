@@ -1373,8 +1373,11 @@ flowchart TD
   repository statement goes through `Database.execute`, which holds the lock
   until the rows are copied off the cursor. Wrap multi-statement work in
   `db.transaction()` (reentrant via SAVEPOINT, same lock).
-- **Headstamps are read fresh, not cached** — don't reintroduce a cached
-  snapshot (it previously caused silent data loss).
+- **Headstamps are read fresh, not cached** on `Config` — don't reintroduce a
+  cached snapshot there (it previously caused silent data loss). The run loop
+  caches only the classifier's headstamp *name* list, dropped on
+  `run/assignment_changed` and `mode/changed`; slot routing still reads the
+  DB so a mid-run assignment applies on the next case.
 - **Cloud features depend on the hosted `reloadingrecipes.com` backend** and a
   specific Azure B2C tenant. The API base URL and its TLS trust are
   environment-overridable (`appenv`, `.env.example`) so you can run against a
