@@ -12,7 +12,7 @@ import builtins
 import json
 from typing import Any, Protocol
 
-from .db import Database
+from .db import Database, LockedRow
 from .models import (
     MODEL_MODES,
     SLOT_TEMPLATE_MODES,
@@ -438,6 +438,88 @@ class SlotTemplateRepo:
 
     def delete(self, template_id: int) -> None:
         self.db.execute("DELETE FROM slot_templates WHERE id = ?", (template_id,))
+
+
+class SortRunRepo:
+    """One row per sort run, and upserted per-label counts inside it.
+
+    ``record`` is an ``INSERT … ON CONFLICT DO UPDATE`` so a run thread can
+    add one case at a time without reading the counter first. Storage errors
+    are the caller's to catch: this class does not swallow them.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def begin(
+        self,
+        *,
+        model_id: int | None,
+        model_name: str | None,
+        mode: str,
+        template_name: str | None,
+        confidence_floor: int,
+        slot_quantity: int,
+    ) -> int:
+        if mode not in SLOT_TEMPLATE_MODES:
+            raise ValueError(f"Unsupported sort-run mode: {mode!r}")
+        cur = self.db.execute(
+            """INSERT INTO sort_runs(
+                   model_id, model_name, mode, template_name, confidence_floor, slot_quantity
+               ) VALUES (?, ?, ?, ?, ?, ?)""",
+            (model_id, model_name, mode, template_name, int(confidence_floor), int(slot_quantity)),
+        )
+        return _require_rowid(cur)
+
+    def record(
+        self,
+        run_id: int,
+        *,
+        label: str,
+        parent: str | None,
+        slot: int,
+        reason: str,
+    ) -> None:
+        """Add one case. The same ``(run, label, slot, reason)`` increments."""
+        self.db.execute(
+            """INSERT INTO sort_run_counts(run_id, label, parent, slot, reason, count)
+               VALUES (?, ?, ?, ?, ?, 1)
+               ON CONFLICT(run_id, label, slot, reason) DO UPDATE SET count = count + 1""",
+            (int(run_id), label or "", parent or None, int(slot), reason),
+        )
+
+    def end(self, run_id: int) -> None:
+        """Stamp ``ended_at`` once. A second call leaves the first stamp."""
+        self.db.execute(
+            "UPDATE sort_runs SET ended_at = datetime('now') WHERE id = ? AND ended_at IS NULL",
+            (int(run_id),),
+        )
+
+    def counts(self, run_id: int) -> list[LockedRow]:
+        return list(
+            self.db.execute(
+                """SELECT run_id, label, parent, slot, reason, count
+                   FROM sort_run_counts WHERE run_id = ?
+                   ORDER BY count DESC, label COLLATE NOCASE, slot, reason""",
+                (int(run_id),),
+            ).fetchall()
+        )
+
+    def recent(self, limit: int = 20, model_id: int | None = None) -> list[LockedRow]:
+        """Newest runs first. ``model_id=None`` is every run, not "AI Config"."""
+        if model_id is None:
+            return list(
+                self.db.execute(
+                    "SELECT * FROM sort_runs ORDER BY started_at DESC, id DESC LIMIT ?",
+                    (int(limit),),
+                ).fetchall()
+            )
+        return list(
+            self.db.execute(
+                "SELECT * FROM sort_runs WHERE model_id = ? ORDER BY started_at DESC, id DESC LIMIT ?",
+                (int(model_id), int(limit)),
+            ).fetchall()
+        )
 
 
 class SettingsRepo:

@@ -40,7 +40,7 @@ from sqlite_utils.migrations import Migrations
 
 from .. import paths
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Split out of SCHEMA_DDL because the v3 -> v4 ladder step replays it verbatim;
 # one copy means the step cannot drift from the schema.
@@ -62,6 +62,34 @@ CREATE TABLE IF NOT EXISTS slot_templates (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_slot_templates_name
   ON slot_templates(IFNULL(model_id, -1), mode, name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_slot_templates_scope ON slot_templates(model_id, mode);
+"""
+
+# One row per Start (or per stretch of Manual feeds) and one counter row per
+# (label, slot, reason) inside it. Replayed by 0007_sort_runs; IF NOT EXISTS
+# so the DDL pass and the migration cannot drift.
+SORT_RUNS_DDL = """
+CREATE TABLE IF NOT EXISTS sort_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_id INTEGER REFERENCES models(id) ON DELETE SET NULL,
+  model_name TEXT,
+  mode TEXT NOT NULL CHECK(mode IN ('standard','package')),
+  template_name TEXT,
+  confidence_floor INTEGER,
+  slot_quantity INTEGER,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  ended_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sort_runs_model_started
+  ON sort_runs(model_id, started_at);
+CREATE TABLE IF NOT EXISTS sort_run_counts (
+  run_id INTEGER NOT NULL REFERENCES sort_runs(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  parent TEXT,
+  slot INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (run_id, label, slot, reason)
+);
 """
 
 # Split out of SCHEMA_DDL for the same reason as SLOT_TEMPLATES_DDL: the
@@ -136,6 +164,7 @@ CREATE TABLE IF NOT EXISTS headstamps (
 CREATE INDEX IF NOT EXISTS idx_headstamps_model ON headstamps(model_id);
 """
     + SLOT_TEMPLATES_DDL
+    + SORT_RUNS_DDL
     + """
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
@@ -301,6 +330,17 @@ def _models_checkpoint_env(db: sqlite_utils.Database) -> None:
     shared helper is idempotent, so replaying it here is free.
     """
     _add_missing_model_columns(db.conn)
+
+
+@MIGRATIONS(name="0007_sort_runs")
+def _sort_runs(db: sqlite_utils.Database) -> None:
+    """Per-run slot counts: ``sort_runs`` plus ``sort_run_counts``.
+
+    Replays the shared ``SORT_RUNS_DDL`` constant (all IF NOT EXISTS), so the
+    step cannot drift from the schema. A fresh database already has the
+    tables from the DDL pass; this is what an older file receives.
+    """
+    _execute_script(db.conn, SORT_RUNS_DDL)
 
 
 class LockedRow:
