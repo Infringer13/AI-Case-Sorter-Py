@@ -864,7 +864,7 @@ and re-ranks on `run/assignment_changed`. The label→slot map is read once
 and reused for later results; `run/assignment_changed`, `mode/changed`, and
 `reset` (template switches and package-mode toggles clear the counts) drop
 it. The header stays the physical slot
-0 total. **Top Ten** (the default) and **ALL** are an exclusive
+0 total. **Top 10** (the default) and **ALL** are an exclusive
 `QButtonGroup` of checkable buttons, right-aligned on the top bar
 (`catchAllMode`; the checked one takes the neutral `accent` fill with
 `text_inverse`, and both states draw a `border_focus` outline. Where those
@@ -872,7 +872,7 @@ roles are a stop red or another saturated signal colour — Gothic's crimson
 accent and focus ring, Comic Book's red accent and go-blue focus ring —
 the fill and outline come from the neutral text ramp instead, `text` /
 `text_highlight` / `text_muted`). The choice is
-remembered on the view for the session. Top Ten paints `open_ranking`'s
+remembered on the view for the session. Top 10 paints `open_ranking`'s
 first 10 plus the Other row. ALL passes `n=None` and paints every key that
 ranking would keep, with no Other row. The table's vertical bar stays
 `ScrollBarAsNeeded`; switching modes does not resize the dock. The table

@@ -145,7 +145,7 @@ def test_catch_all_mode_buttons_stay_off_stop_colours(qapp, name: str) -> None:
     assert _contrast(palette[fill], palette["accent_dim"]) >= 3, name
     assert _contrast(palette[ink], palette[fill]) >= 4.5, name
 
-    off = QPushButton("Top Ten")
+    off = QPushButton("Top 10")
     on = QPushButton("ALL")
     for button in (off, on):
         button.setObjectName("catchAllMode")

@@ -126,7 +126,7 @@ def _first_neutral(colors: dict[str, str], keys: tuple[str, ...]) -> str:
 
 
 def catch_all_mode_colors(colors: dict[str, str]) -> dict[str, str]:
-    """Fill, ink, and outline for the Catch-All Top Ten / ALL toggle.
+    """Fill, ink, and outline for the Catch-All Top 10 / ALL toggle.
 
     Dark, Light, Sepia, and Midnight Blue keep the accent ramp and
     ``border_focus``. Gothic and Comic Book define ``accent`` as a stop red
@@ -615,7 +615,7 @@ QPushButton#action:pressed {{
     border-color: {c["action_press"]};
 }}
 
-/* Catch-All Top Ten / ALL. A view switch is a selection, so it stays off
+/* Catch-All Top 10 / ALL. A view switch is a selection, so it stays off
    stop/danger hues. The lit button prefers the accent ramp, and both
    states draw a 2px border_focus outline — what Dark, Light, Sepia and
    Midnight Blue already are. accent is a stop red in Gothic and Comic
