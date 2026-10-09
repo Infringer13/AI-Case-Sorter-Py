@@ -68,7 +68,7 @@ def test_a_fresh_panel_is_empty_and_closed(window) -> None:
     assert view.add_button.toolTip() == "Select a headstamp."
     assert _menu_texts(view) == []
     assert view.assigned_label.isHidden()
-    assert view.top_ten_button.text() == "Top Ten"
+    assert view.top_ten_button.text() == "Top 10"
     assert view.all_button.text() == "ALL"
     assert view.top_ten_button.objectName() == "catchAllMode"
     assert view.all_button.objectName() == "catchAllMode"
@@ -668,9 +668,9 @@ def test_all_lists_every_row_and_does_not_resize_the_dock(qapp, window, config) 
     assert abs(view.all_button.geometry().right() - (view.width() - margin)) <= 2
     assert view.top_ten_button.x() > margin
     assert view.top_ten_button.geometry().right() <= view.all_button.x()
-    success = QColor(window.palette_colors["success"])
-    assert _near(_fill(view.top_ten_button), success)
-    assert not _near(_fill(view.all_button), success)
+    accent = QColor(window.palette_colors["accent"])
+    assert _near(_fill(view.top_ten_button), accent)
+    assert not _near(_fill(view.all_button), accent)
 
     view.all_button.click()
     qapp.processEvents()
@@ -680,8 +680,8 @@ def test_all_lists_every_row_and_does_not_resize_the_dock(qapp, window, config) 
     assert not view.top_ten_button.isChecked()
     assert _names(view) == [f"H{index:02d}" for index in range(13)]
     assert view.table.rowCount() == 13
-    assert _near(_fill(view.all_button), success)
-    assert not _near(_fill(view.top_ten_button), success)
+    assert _near(_fill(view.all_button), accent)
+    assert not _near(_fill(view.top_ten_button), accent)
     view.table.setFixedHeight(48)
     qapp.processEvents()
     assert view.table.verticalScrollBar().maximum() > 0

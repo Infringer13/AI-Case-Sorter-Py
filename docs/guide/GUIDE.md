@@ -197,10 +197,10 @@ The header is that count against everything sorted so far ("319 in catch-all
 of 615 sorted (52%)"). It stays the number of cases physically in the bin,
 even after you assign some of them.
 
-**Top Ten** and **ALL**, at the upper right, choose how much of the list you
-see. Exactly one is lit, in the theme's success colour (green on the stock
-dark and light themes); the other stays an ordinary button. The panel opens
-on **Top Ten**. Each row is a headstamp that would still land in the
+**Top 10** and **ALL**, at the upper right, choose how much of the list you
+see. Exactly one is lit, in a neutral highlight; the other stays an
+ordinary button. Both keep a visible outline. The panel
+opens on **Top 10**. Each row is a headstamp that would still land in the
 catch-all if it were seen now, with its remaining count, its share of the
 catch-all, and the reason:
 
@@ -213,7 +213,7 @@ catch-all, and the reason:
 - **Batch full** — [package mode](#package-mode), and every slot for that
   headstamp was already full.
 
-**Top Ten** keeps the ten fullest of those rows. Anything past them is one
+**Top 10** keeps the ten fullest of those rows. Anything past them is one
 greyed **Other** row ("Other: 2 headstamps, 4 cases"). It cannot be selected.
 **ALL** lists every such headstamp, in the same order, with no Other row.
 The table scrolls when that list is longer than the panel. Opening the panel,
