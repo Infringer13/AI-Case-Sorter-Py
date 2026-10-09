@@ -514,22 +514,41 @@ QPushButton#action:pressed {{
     border-color: {c["action_press"]};
 }}
 
-/* Catch-All Top Ten / ALL. Unchecked stays the plain QPushButton above.
-   Checked takes `success`, which tracks `action` (green, or the theme's go
-   colour when the theme has no green). Hover and press use the action
-   ramps, the same green one step each way. */
+/* Catch-All Top Ten / ALL. A view switch is a selection, so the lit
+   button uses the neutral accent ramp (accent / accent_hover /
+   accent_press) with text_inverse, the ink that already contrasts with
+   that ramp in every built-in theme. Both states draw a 2px border_focus
+   outline. The plain `border` role sits too close to the panel on the
+   dark themes to read as a button edge, and a light accent fill needs
+   that edge. Unchecked keeps the plain QPushButton fill above. */
+QPushButton#catchAllMode {{
+    border: 2px solid {c["border_focus"]};
+}}
+QPushButton#catchAllMode:hover {{
+    border-color: {c["border_focus"]};
+}}
+QPushButton#catchAllMode:pressed {{
+    background-color: {c["bg_card_sel"]};
+    border-color: {c["border_focus"]};
+}}
 QPushButton#catchAllMode:checked {{
-    background-color: {c["success"]};
+    background-color: {c["accent"]};
     color: {c["text_inverse"]};
-    border-color: {c["success"]};
+    border: 2px solid {c["border_focus"]};
 }}
 QPushButton#catchAllMode:checked:hover {{
-    background-color: {c["action_hover"]};
-    border-color: {c["action_hover"]};
+    background-color: {c["accent_hover"]};
+    border-color: {c["border_focus"]};
 }}
 QPushButton#catchAllMode:checked:pressed {{
-    background-color: {c["action_press"]};
-    border-color: {c["action_press"]};
+    background-color: {c["accent_press"]};
+    border-color: {c["border_focus"]};
+}}
+QPushButton#catchAllMode:disabled,
+QPushButton#catchAllMode:checked:disabled {{
+    color: {c["text_muted"]};
+    background-color: transparent;
+    border: 2px solid {c["border"]};
 }}
 
 QPushButton#update {{

@@ -866,8 +866,8 @@ and reused for later results; `run/assignment_changed`, `mode/changed`, and
 it. The header stays the physical slot
 0 total. **Top Ten** (the default) and **ALL** are an exclusive
 `QButtonGroup` of checkable buttons, right-aligned on the top bar
-(`catchAllMode`; the checked one takes the palette `success` fill, the
-other stays a plain button). The choice is
+(`catchAllMode`; the checked one takes the palette `accent` fill with
+`text_inverse`, and both states draw a `border_focus` outline). The choice is
 remembered on the view for the session. Top Ten paints `open_ranking`'s
 first 10 plus the Other row. ALL passes `n=None` and paints every key that
 ranking would keep, with no Other row. The table's vertical bar stays

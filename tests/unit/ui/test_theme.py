@@ -26,17 +26,56 @@ def test_stylesheet_carries_the_palette(name: str) -> None:
         assert palette[role] in qss, f"{name}: {role} missing from the stylesheet"
 
 
-def test_the_catch_all_mode_button_is_green_only_when_checked() -> None:
-    palette = BUILTIN_THEMES["Dark"]
+@pytest.mark.parametrize("name", list(BUILTIN_THEMES))
+def test_catch_all_mode_buttons_use_the_accent_and_a_visible_outline(qapp, name: str) -> None:
+    """A view switch is a selection: accent fill, and an outline on both states."""
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QPushButton
+
+    palette = BUILTIN_THEMES[name]
     qss = build_stylesheet(palette)
+    outline = f"border: 2px solid {palette['border_focus']}"
+    resting = block(qss, "QPushButton#catchAllMode")
     checked = block(qss, "QPushButton#catchAllMode:checked")
-    assert palette["success"] in checked
-    assert palette["text_inverse"] in checked
-    # Unchecked stays the plain QPushButton rule. A fill on the bare name
-    # would light both toggles at once.
-    assert "QPushButton#catchAllMode {" not in qss
-    light = build_stylesheet(BUILTIN_THEMES["Light"])
-    assert BUILTIN_THEMES["Light"]["success"] in block(light, "QPushButton#catchAllMode:checked")
+    hover = block(qss, "QPushButton#catchAllMode:checked:hover")
+    pressed = block(qss, "QPushButton#catchAllMode:checked:pressed")
+
+    # No fill on the bare name: that would light both toggles at once.
+    assert "background-color" not in resting
+    assert outline in resting
+    assert palette["success"] not in resting
+    assert f"background-color: {palette['accent']};" in checked
+    assert f"color: {palette['text_inverse']};" in checked
+    assert outline in checked
+    assert palette["success"] not in checked
+    assert palette["action"] not in checked
+    assert f"background-color: {palette['accent_hover']};" in hover
+    assert f"background-color: {palette['accent_press']};" in pressed
+
+    off = QPushButton("Top Ten")
+    on = QPushButton("ALL")
+    for button in (off, on):
+        button.setObjectName("catchAllMode")
+        button.setCheckable(True)
+        button.setStyleSheet(qss)
+        button.show()
+    on.setChecked(True)
+    qapp.processEvents()
+
+    def _near(got: QColor, want: str) -> bool:
+        target = QColor(want)
+        return (
+            max(abs(got.red() - target.red()), abs(got.green() - target.green()), abs(got.blue() - target.blue())) <= 8
+        )
+
+    for button, fill in ((off, palette["accent_dim"]), (on, palette["accent"])):
+        image = button.grab().toImage()
+        assert image.width() > 16 and image.height() > 4
+        assert _near(image.pixelColor(10, image.height() // 2), fill), name
+        # The left edge is the outline, clear of the label and the rounded corner.
+        assert _near(image.pixelColor(1, image.height() // 2), palette["border_focus"]), name
+    off.deleteLater()
+    on.deleteLater()
 
 
 @pytest.mark.parametrize("name", list(BUILTIN_THEMES))

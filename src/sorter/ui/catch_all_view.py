@@ -12,7 +12,7 @@ floor, upside down and batch full stay, and a mixed row shows only that
 remainder. **Top Ten** (the default) paints the first 10 of that ranking
 plus a greyed Other row. **ALL** paints every one of them, and the table
 scrolls. The two are an exclusive pair at the upper right of the panel;
-the lit one uses the palette's ``success`` fill, and the choice lasts for
+the lit one uses the palette's ``accent`` fill, and the choice lasts for
 the session. The header stays
 the physical bin total. A line under the table names what left the ranking
 and how many of those cases are already in bin 0.
