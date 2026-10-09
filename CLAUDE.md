@@ -479,6 +479,13 @@ between them from the Sort page's template dropdown.
   OpenCV can only fail to open, loudly), and a device that overruns
   `PROBE_TIMEOUT_S` is dropped **with a note on stderr** — silence there once
   cost a hardware investigation to explain a camera missing from the list.
+  On macOS that budget is 20 s rather than 6 s: AVFoundation renegotiates the
+  format on every resolution `set()`, and the stock sorter camera behind a
+  USB 2.0 hub takes well over 6 s to walk `COMMON_RESOLUTIONS` (measured
+  ~12 s for that camera, ~18 s for two), so Detect was dropping it.
+  `camera_names()` on macOS asks `system_profiler SPCameraDataType -json`
+  and uses the result only when it lists a single camera — AVFoundation's
+  index order is not that list, so two or more names would be a guess.
 
 ### The sort loop (`sorter/control/run_controller.py`)
 - **`run_controller.py`** — `RunController`: the production loop on a daemon
