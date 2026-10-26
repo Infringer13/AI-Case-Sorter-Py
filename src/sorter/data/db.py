@@ -31,7 +31,7 @@ import json
 import shutil
 import sqlite3
 import threading
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -442,7 +442,7 @@ class Database:
             self._conn = None
 
     @contextlib.contextmanager
-    def transaction(self) -> Iterator[sqlite3.Connection]:
+    def transaction(self) -> Generator[sqlite3.Connection]:
         """Run statements in a single transaction. Auto-commit/rollback.
 
         Reentrant: when called within an existing transaction, uses a
